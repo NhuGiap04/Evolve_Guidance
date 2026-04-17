@@ -8,7 +8,6 @@ from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
 
 from config.sdxl import get_config
-from seg.diffusers_patch.pipeline_using_Stein_SDXL import pipeline_using_stein_sdxl
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
@@ -157,13 +156,13 @@ def main():
     pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
-    pipe.__call__ = pipeline_using_stein_sdxl.__get__(pipe, pipe.__class__)
 
-    # Keep VAE and text encoders in fp32 for SDXL stability.
+    # Keep VAE in fp32 for decode stability.
+    # Keep text encoders in UNet/inference dtype to avoid cross-attention dtype mismatch.
     pipe.vae.to(torch.float32)
-    pipe.text_encoder.to(torch.float32)
+    pipe.text_encoder.to(dtype=inference_dtype)
     if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
-        pipe.text_encoder_2.to(torch.float32)
+        pipe.text_encoder_2.to(dtype=inference_dtype)
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     eval_scorer = None
