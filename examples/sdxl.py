@@ -1,4 +1,5 @@
 import argparse
+import gc
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -60,6 +61,12 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=None, help="Optional batch size override.")
     parser.add_argument("--guidance-scale", type=float, default=None, help="Optional CFG scale override.")
     parser.add_argument("--eta", type=float, default=None, help="Optional DDIM eta override.")
+    parser.add_argument(
+        "--trace-decode-batch-size",
+        type=int,
+        default=1,
+        help="How many latent samples to decode at once when tracing each denoising step.",
+    )
     return parser.parse_args()
 
 
@@ -105,6 +112,19 @@ def decode_latents_sdxl(pipe, latents):
     return pipe.image_processor.postprocess(image, output_type="pt", do_denormalize=do_denormalize)
 
 
+def release_generation_modules(pipe):
+    # Per-step trace decoding does not need UNet/text encoders anymore.
+    pipe.unet.to("cpu")
+    if hasattr(pipe, "text_encoder") and pipe.text_encoder is not None:
+        pipe.text_encoder.to("cpu")
+    if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
+        pipe.text_encoder_2.to("cpu")
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def save_tensor_image(image_tensor, path):
     image_np = (image_tensor.detach().cpu().numpy() * 255.0).round().clip(0, 255).astype(np.uint8)
     image_np = image_np.transpose(1, 2, 0)
@@ -127,6 +147,9 @@ def save_trace_plot(step_ids, mean_trace, max_trace, title, ylabel, out_path):
 
 def main():
     args = parse_args()
+
+    if args.trace_decode_batch_size < 1:
+        raise ValueError("--trace-decode-batch-size must be >= 1")
 
     config = get_config(args.config)
     if args.seed is not None:
@@ -156,6 +179,8 @@ def main():
     pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
+    pipe.enable_vae_slicing()
+    pipe.enable_attention_slicing("max")
 
     # Keep VAE in fp32 for decode stability.
     # Keep text encoders in UNet/inference dtype to avoid cross-attention dtype mismatch.
@@ -198,7 +223,7 @@ def main():
         all_latents.append(callback_kwargs["latents"].detach().to("cpu", dtype=trace_storage_dtype))
         return callback_kwargs
 
-    with torch.no_grad():
+    with torch.inference_mode():
         result = pipe(
             prompt=prompts,
             negative_prompt=args.negative_prompt,
@@ -212,8 +237,13 @@ def main():
         )
 
     final_latents = result.images if hasattr(result, "images") else result[0]
-    final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
-    final_steer_scores = steer_scorer(final_images, prompts).detach().float().cpu().numpy()
+    with torch.inference_mode():
+        final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
+        final_steer_scores = steer_scorer(final_images, prompts).detach().float().cpu().numpy()
+
+    # Free generation-only modules before the expensive per-step decode+score loop.
+    if device.type == "cuda":
+        release_generation_modules(pipe)
 
     step_ids = np.arange(1, len(all_latents) + 1)
     steer_reward_mean_trace = []
@@ -222,10 +252,26 @@ def main():
     eval_reward_max_trace = []
 
     for step_idx, step_latents_cpu in enumerate(all_latents, start=1):
-        step_latents = step_latents_cpu.to(device=device, dtype=inference_dtype)
-        step_images = decode_latents_sdxl(pipe, step_latents)
+        steer_step_scores = []
+        eval_step_scores = []
 
-        steer_scores = steer_scorer(step_images, prompts).detach().float().cpu()
+        for offset in range(0, step_latents_cpu.shape[0], args.trace_decode_batch_size):
+            step_chunk = step_latents_cpu[offset : offset + args.trace_decode_batch_size]
+
+            with torch.inference_mode():
+                step_latents = step_chunk.to(device=device, dtype=inference_dtype)
+                step_images = decode_latents_sdxl(pipe, step_latents)
+
+                steer_scores = steer_scorer(step_images, prompts[offset : offset + step_images.shape[0]]).detach().float().cpu()
+                steer_step_scores.append(steer_scores)
+
+                if eval_scorer is not None:
+                    eval_scores = eval_scorer(step_images, prompts[offset : offset + step_images.shape[0]]).detach().float().cpu()
+                    eval_step_scores.append(eval_scores)
+
+            del step_latents, step_images
+
+        steer_scores = torch.cat(steer_step_scores, dim=0)
         steer_reward_mean_trace.append(steer_scores.mean().item())
         steer_reward_max_trace.append(steer_scores.max().item())
 
@@ -236,13 +282,20 @@ def main():
         )
 
         if eval_scorer is not None:
-            eval_scores = eval_scorer(step_images, prompts).detach().float().cpu()
+            eval_scores = torch.cat(eval_step_scores, dim=0)
             eval_reward_mean_trace.append(eval_scores.mean().item())
             eval_reward_max_trace.append(eval_scores.max().item())
             log_msg += (
                 f" | eval_mean={eval_scores.mean().item():.6f}"
                 f" eval_max={eval_scores.max().item():.6f}"
             )
+
+        del steer_scores
+        if eval_scorer is not None:
+            del eval_scores
+
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         print(log_msg)
 

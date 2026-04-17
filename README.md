@@ -14,7 +14,7 @@ pip install --no-deps image-reward
 Run the detailed SDXL example with intermediate reward tracing and plotting:
 
 ```bash
-python examples/sdxl.py --config pick --prompt "A cinematic portrait of a fox astronaut" --num-steps 80 --guidance-scale 6.0 --eval-reward image_reward --output-dir logs/examples/sdxl_detailed
+python examples/sdxl.py --config pick --prompt "A cinematic portrait of a fox astronaut" --num-steps 80 --guidance-scale 6.0 --eval-reward image_reward --output-dir logs/examples/sdxl_detailed --trace-decode-batch-size 4
 ```
 
 - `--config`: reward preset (`pick`, `clip`, `seg`)
