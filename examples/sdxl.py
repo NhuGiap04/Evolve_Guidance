@@ -192,9 +192,10 @@ def main():
     )
 
     all_latents = []
+    trace_storage_dtype = torch.float16 if inference_dtype == torch.float16 else torch.float32
 
     def collect_step_latents(_pipe, _step_idx, _timestep, callback_kwargs):
-        all_latents.append(callback_kwargs["latents"].detach().to("cpu", dtype=torch.float16))
+        all_latents.append(callback_kwargs["latents"].detach().to("cpu", dtype=trace_storage_dtype))
         return callback_kwargs
 
     with torch.no_grad():
@@ -204,13 +205,14 @@ def main():
             num_inference_steps=config.sample.num_steps,
             guidance_scale=config.sample.guidance_scale,
             eta=config.sample.eta,
-            output_type="pt",
+            output_type="latent",
             latents=latents_0,
             callback_on_step_end=collect_step_latents,
             callback_on_step_end_tensor_inputs=["latents"],
         )
 
-    final_images = result.images if hasattr(result, "images") else result[0]
+    final_latents = result.images if hasattr(result, "images") else result[0]
+    final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
     final_steer_scores = steer_scorer(final_images, prompts).detach().float().cpu().numpy()
 
     step_ids = np.arange(1, len(all_latents) + 1)

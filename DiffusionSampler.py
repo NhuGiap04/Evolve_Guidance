@@ -57,10 +57,39 @@ class DiffusionModelSampler:
         if "xl" in self.config.pretrained.model:
             print("Configuring SDXL")
             self.pipeline.vae.to(torch.float32)
-            self.pipeline.text_encoder.to(torch.float32)
+            self.pipeline.text_encoder.to(dtype=self.inference_dtype)
             if hasattr(self.pipeline, "text_encoder_2") and self.pipeline.text_encoder_2 is not None:
-                self.pipeline.text_encoder_2.to(torch.float32)
+                self.pipeline.text_encoder_2.to(dtype=self.inference_dtype)
             self.autocast = contextlib.nullcontext
+
+    def _decode_latents_sdxl(self, latents):
+        needs_upcasting = self.pipeline.vae.dtype == torch.float16 and self.pipeline.vae.config.force_upcast
+
+        if needs_upcasting:
+            self.pipeline.upcast_vae()
+            latents = latents.to(next(iter(self.pipeline.vae.post_quant_conv.parameters())).dtype)
+        elif latents.dtype != self.pipeline.vae.dtype:
+            if torch.backends.mps.is_available():
+                self.pipeline.vae = self.pipeline.vae.to(latents.dtype)
+            else:
+                latents = latents.to(self.pipeline.vae.dtype)
+
+        has_latents_mean = hasattr(self.pipeline.vae.config, "latents_mean") and self.pipeline.vae.config.latents_mean is not None
+        has_latents_std = hasattr(self.pipeline.vae.config, "latents_std") and self.pipeline.vae.config.latents_std is not None
+        if has_latents_mean and has_latents_std:
+            latents_mean = torch.tensor(self.pipeline.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+            latents_std = torch.tensor(self.pipeline.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
+            latents = latents * latents_std / self.pipeline.vae.config.scaling_factor + latents_mean
+        else:
+            latents = latents / self.pipeline.vae.config.scaling_factor
+
+        image = self.pipeline.vae.decode(latents, return_dict=False)[0]
+
+        if needs_upcasting:
+            self.pipeline.vae.to(dtype=torch.float16)
+
+        do_denormalize = [True] * image.shape[0]
+        return self.pipeline.image_processor.postprocess(image, output_type="pt", do_denormalize=do_denormalize)
 
     def setup_accelerator(self, *args, **kwargs):
         """Setup the Accelerate environment and logging."""
@@ -204,16 +233,27 @@ class DiffusionModelSampler:
 
                 # Sample images
                 with self.autocast():
-                    result = self.pipeline(
-                        prompt=prompts_batch,
-                        num_inference_steps=self.config.sample.num_steps,
-                        guidance_scale=self.config.sample.guidance_scale,
-                        eta=self.config.sample.eta,
-                        output_type="pt", 
-                        latents=latents_0_batch,
-                    )
-
-                images = result.images if hasattr(result, "images") else result[0]
+                    if "xl" in self.config.pretrained.model:
+                        result = self.pipeline(
+                            prompt=prompts_batch,
+                            num_inference_steps=self.config.sample.num_steps,
+                            guidance_scale=self.config.sample.guidance_scale,
+                            eta=self.config.sample.eta,
+                            output_type="latent",
+                            latents=latents_0_batch,
+                        )
+                        latents_out = result.images if hasattr(result, "images") else result[0]
+                        images = self._decode_latents_sdxl(latents_out)
+                    else:
+                        result = self.pipeline(
+                            prompt=prompts_batch,
+                            num_inference_steps=self.config.sample.num_steps,
+                            guidance_scale=self.config.sample.guidance_scale,
+                            eta=self.config.sample.eta,
+                            output_type="pt",
+                            latents=latents_0_batch,
+                        )
+                        images = result.images if hasattr(result, "images") else result[0]
 
                 rewards = self.reward_fn(images, prompts_batch)
 
