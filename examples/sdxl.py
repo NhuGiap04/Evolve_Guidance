@@ -223,7 +223,7 @@ def main():
         all_latents.append(callback_kwargs["latents"].detach().to("cpu", dtype=trace_storage_dtype))
         return callback_kwargs
 
-    with torch.inference_mode():
+    with torch.no_grad():
         result = pipe(
             prompt=prompts,
             negative_prompt=args.negative_prompt,
@@ -237,7 +237,7 @@ def main():
         )
 
     final_latents = result.images if hasattr(result, "images") else result[0]
-    with torch.inference_mode():
+    with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
         final_steer_scores = steer_scorer(final_images, prompts).detach().float().cpu().numpy()
 
@@ -258,7 +258,7 @@ def main():
         for offset in range(0, step_latents_cpu.shape[0], args.trace_decode_batch_size):
             step_chunk = step_latents_cpu[offset : offset + args.trace_decode_batch_size]
 
-            with torch.inference_mode():
+            with torch.no_grad():
                 step_latents = step_chunk.to(device=device, dtype=inference_dtype)
                 step_images = decode_latents_sdxl(pipe, step_latents)
 
