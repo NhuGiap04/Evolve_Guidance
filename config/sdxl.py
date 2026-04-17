@@ -21,8 +21,6 @@ def clip():
     config = seg()
     config.reward_fn = "clip"
     config.prompt_fn = "eval_hps_v2_all"
-    
-    config.smc.kl_coeff = 0.01
 
     return config
 
@@ -31,8 +29,6 @@ def pick():
     config = seg()
     config.reward_fn = "pick"
     config.prompt_fn = "eval_hps_v2_all"
-    
-    config.smc.kl_coeff = 0.0001
 
     return config
 
