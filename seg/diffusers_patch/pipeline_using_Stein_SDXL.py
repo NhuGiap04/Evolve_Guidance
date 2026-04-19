@@ -667,11 +667,16 @@ def pipeline_using_stein_sdxl(
             sigma_t = eta * torch.sqrt(torch.clamp(variance_t, min=0.0))
             pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t**2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
+            pred_x0, _, _ = _predict_x0(latents, t_int, noise_pred)
 
             latents_dtype = latents.dtype
             
-            # Manifold-preserving proposal
-            latents = torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * latents + pred_noise_coeff * noise_pred + sigma_t * white_noise
+            # DDIM proposal from predicted clean sample and guided noise.
+            latents = (
+                torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0
+                + pred_noise_coeff * noise_pred
+                + sigma_t * white_noise
+            )
             if latents.dtype != latents_dtype and torch.backends.mps.is_available():
                 latents = latents.to(latents_dtype)
 

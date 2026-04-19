@@ -300,7 +300,7 @@ def main():
         kl_coeff=config.sample.kl_coeff,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
-        show_intermediate_rewards=False,
+        show_intermediate_rewards=config.sample.show_intermediate_rewards,
         return_dict=False,
         return_intermediate_rewards=True,
     )

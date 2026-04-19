@@ -9,9 +9,34 @@ pip install -e .
 pip install --no-deps image-reward
 ```
 
-## Example Usage
+## Usage
 
-Run the detailed SDXL Stein-guided sampler:
+### 1) Basic run (recommended starting point)
+
+```bash
+python examples/sdxl.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --negative-prompt "blurry, low quality, distorted" \
+  --eval-reward image_reward \
+  --device cuda \
+  --seed 42 \
+  --num-steps 80 \
+  --guidance-scale 6.0 \
+  --eta 1.0 \
+  --batch-size 1 \
+  --num-particles 4 \
+  --batch-p 1 \
+  --stein-loop 1 \
+  --stein-step 0.02 \
+  --stein-adagrad-eps 1e-8 \
+  --kl-coeff 1.0 \
+  --steer-start 20 \
+  --steer-end 60 \
+  --output-dir logs/sdxl
+```
+
+### 2) Save intermediate decoded images for each denoising step
 
 ```bash
 python examples/sdxl.py \
@@ -19,49 +44,34 @@ python examples/sdxl.py \
   --prompt "A cinematic portrait of a fox astronaut" \
   --eval-reward image_reward \
   --num-steps 80 \
-  --guidance-scale 6.0 \
   --num-particles 4 \
-  --stein-loop 2 \
+  --batch-p 1 \
+  --stein-loop 1 \
   --stein-step 0.02 \
-  --steer-start 0 \
-  --steer-end 79 \
-  --output-dir logs/sdxl
-```
-
-Run with intermediate decoded images at each denoising step:
-
-```bash
-python examples/sdxl.py \
-  --config pick \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --eval-reward image_reward \
+  --steer-start 20 \
+  --steer-end 60 \
   --save-intermediate-images \
-  --trace-decode-batch-size 2 \
+  --trace-decode-batch-size 1 \
   --intermediate-max-samples 2 \
   --output-dir logs/sdxl
 ```
 
+Then run the same command as above. For each steered timestep, you will see:
+
+- `pre_mean -> post_mean`
+- `pre_max -> post_max`
+
+## Important Arguments
+
 - `--config`: reward preset (`pick`, `clip`, `seg`)
-- `--num-particles`: number of particles used in Stein updates
-- `--stein-loop`: number of inner Stein loops per steered timestep
-- `--stein-step`: base step size for Stein AdaGrad updates
 - `--eval-reward`: optional final-image eval scorer (`none`, `clip`, `pick`, `image_reward`)
-- `--steer-start`, `--steer-end`: steering window over inference-step indices (0-based, defaults to full range)
-- `--trace-decode-batch-size`: decode micro-batch size for intermediate image tracing
+- `--num-particles`: number of particles for Stein guidance
+- `--batch-p`: reward-gradient micro-batch in particle units
+- `--stein-loop`: number of Stein inner updates per steered step
+- `--stein-step`: base step size for Stein updates
+- `--kl-coeff`: scales reward term in the score combination
+- `--steer-start`, `--steer-end`: steering window over inference-step indices (0-based)
 - `--save-intermediate-images`: save decoded intermediate images for each denoising step
-- `--intermediate-max-samples`: optional cap on number of saved intermediate samples per step
+- `--trace-decode-batch-size`: decoding micro-batch size while tracing
+- `--intermediate-max-samples`: optional cap on saved intermediate samples per step
 
-The script now prints before/after steering rewards to terminal for each steered step:
-
-- mean reward: `pre -> post` with delta
-- max reward: `pre -> post` with delta
-
-Outputs are saved under `logs/sdxl_detailed/<config>_seed<seed>`.
-
-Key visualization outputs:
-
-- `steer_before_after_mean.png`: before vs after steering mean reward curve
-- `steer_before_after_max.png`: before vs after steering max reward curve
-- `steer_pre_mean.npy`, `steer_post_mean.npy`
-- `steer_pre_max.npy`, `steer_post_max.npy`
-- final sampled images named with steering score
