@@ -241,6 +241,18 @@ class DiffusionModelSampler:
                             eta=self.config.sample.eta,
                             output_type="latent",
                             latents=latents_0_batch,
+                            num_particles=getattr(self.config.sample, "num_particles", 1),
+                            batch_p=getattr(self.config.sample, "batch_p", 1),
+                            reward_fn=self.reward_fn,
+                            stein_step=getattr(self.config.sample, "stein_step", 0.0),
+                            stein_loop=getattr(self.config.sample, "stein_loop", 0),
+                            stein_kernel=getattr(self.config.sample, "stein_kernel", "rbf"),
+                            stein_adagrad_eps=getattr(self.config.sample, "stein_adagrad_eps", 1e-8),
+                            stein_adagrad_clip=getattr(self.config.sample, "stein_adagrad_clip", None),
+                            kl_coeff=getattr(self.config.sample, "kl_coeff", 1.0),
+                            steer_start=getattr(self.config.sample, "steer_start", None),
+                            steer_end=getattr(self.config.sample, "steer_end", None),
+                            show_intermediate_rewards=getattr(self.config.sample, "show_intermediate_rewards", False),
                         )
                         latents_out = result.images if hasattr(result, "images") else result[0]
                         images = self._decode_latents_sdxl(latents_out)

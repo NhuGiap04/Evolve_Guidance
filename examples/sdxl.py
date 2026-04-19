@@ -1,5 +1,5 @@
 import argparse
-import gc
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -9,6 +9,7 @@ from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
 
 from config.sdxl import get_config
+from seg.diffusers_patch.pipeline_using_Stein_SDXL import pipeline_using_stein_sdxl
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
@@ -16,7 +17,7 @@ from seg.scorers.clip_scorer import CLIPScorer
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL sampling with intermediate reward traces and plots."
+        description="SDXL Stein-guided sampling with optional intermediate steering logs."
     )
     parser.add_argument(
         "--config",
@@ -40,15 +41,15 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="logs/examples/sdxl_detailed",
-        help="Directory for generated images, traces, and plots.",
+        default="logs/examples/sdxl_stein",
+        help="Directory for generated images and logs.",
     )
     parser.add_argument(
         "--eval-reward",
         type=str,
-        default="image_reward",
+        default="none",
         choices=["none", "clip", "pick", "image_reward"],
-        help="Optional second reward model for tracing decoded steps.",
+        help="Optional second reward model for final-image evaluation.",
     )
     parser.add_argument(
         "--device",
@@ -56,17 +57,58 @@ def parse_args():
         default="cuda",
         help="Device to run on, e.g. cuda or cpu.",
     )
+
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
     parser.add_argument("--num-steps", type=int, default=None, help="Optional num inference steps override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Optional batch size override.")
     parser.add_argument("--guidance-scale", type=float, default=None, help="Optional CFG scale override.")
     parser.add_argument("--eta", type=float, default=None, help="Optional DDIM eta override.")
+
+    parser.add_argument("--num-particles", type=int, default=None, help="Optional number of particles override.")
+    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward-gradient micro-batch particle count.")
+    parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
+    parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
+    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
+    parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
+    parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
-        "--trace-decode-batch-size",
+        "--steer-start",
         type=int,
-        default=1,
-        help="How many latent samples to decode at once when tracing each denoising step.",
+        default=None,
+        help="Steering start inference-step index (0-based, default: 0).",
     )
+    parser.add_argument(
+        "--steer-end",
+        type=int,
+        default=None,
+        help="Steering end inference-step index (0-based, default: last step).",
+    )
+
+    parser.add_argument(
+        "--save-logs",
+        dest="save_logs",
+        action="store_true",
+        help="Save intermediate steering rewards and plots.",
+    )
+    parser.add_argument(
+        "--no-save-logs",
+        dest="save_logs",
+        action="store_false",
+        help="Skip intermediate steering logs/plots to save time.",
+    )
+    parser.set_defaults(save_logs=True)
+
+    parser.add_argument(
+        "--save-intermediate-images",
+        action="store_true",
+        help="When save_logs is enabled, also decode and save before/after steered intermediate images.",
+    )
+    parser.add_argument(
+        "--show-intermediate-rewards",
+        action="store_true",
+        help="Print per-step pre/post steering rewards during sampling.",
+    )
+
     return parser.parse_args()
 
 
@@ -112,30 +154,17 @@ def decode_latents_sdxl(pipe, latents):
     return pipe.image_processor.postprocess(image, output_type="pt", do_denormalize=do_denormalize)
 
 
-def release_generation_modules(pipe):
-    # Per-step trace decoding does not need UNet/text encoders anymore.
-    pipe.unet.to("cpu")
-    if hasattr(pipe, "text_encoder") and pipe.text_encoder is not None:
-        pipe.text_encoder.to("cpu")
-    if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
-        pipe.text_encoder_2.to("cpu")
-
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
 def save_tensor_image(image_tensor, path):
     image_np = (image_tensor.detach().cpu().numpy() * 255.0).round().clip(0, 255).astype(np.uint8)
     image_np = image_np.transpose(1, 2, 0)
     Image.fromarray(image_np).save(path)
 
 
-def save_trace_plot(step_ids, mean_trace, max_trace, title, ylabel, out_path):
+def save_before_after_plot(step_ids, pre_values, post_values, title, out_path, ylabel="Reward"):
     plt.figure(figsize=(10, 5))
-    plt.plot(step_ids, mean_trace, label="mean")
-    plt.plot(step_ids, max_trace, label="max")
-    plt.xlabel("Sampling step")
+    plt.plot(step_ids, pre_values, label="before_steer", linewidth=2)
+    plt.plot(step_ids, post_values, label="after_steer", linewidth=2)
+    plt.xlabel("Steered timestep index")
     plt.ylabel(ylabel)
     plt.title(title)
     plt.grid(True, alpha=0.3)
@@ -148,9 +177,6 @@ def save_trace_plot(step_ids, mean_trace, max_trace, title, ylabel, out_path):
 def main():
     args = parse_args()
 
-    if args.trace_decode_batch_size < 1:
-        raise ValueError("--trace-decode-batch-size must be >= 1")
-
     config = get_config(args.config)
     if args.seed is not None:
         config.seed = args.seed
@@ -162,6 +188,27 @@ def main():
         config.sample.guidance_scale = args.guidance_scale
     if args.eta is not None:
         config.sample.eta = args.eta
+
+    if args.num_particles is not None:
+        config.sample.num_particles = args.num_particles
+    if args.batch_p is not None:
+        config.sample.batch_p = args.batch_p
+    if args.stein_step is not None:
+        config.sample.stein_step = args.stein_step
+    if args.stein_loop is not None:
+        config.sample.stein_loop = args.stein_loop
+    if args.stein_kernel is not None:
+        config.sample.stein_kernel = args.stein_kernel
+    if args.stein_adagrad_eps is not None:
+        config.sample.stein_adagrad_eps = args.stein_adagrad_eps
+    if args.kl_coeff is not None:
+        config.sample.kl_coeff = args.kl_coeff
+    if args.steer_start is not None:
+        config.sample.steer_start = args.steer_start
+    if args.steer_end is not None:
+        config.sample.steer_end = args.steer_end
+
+    config.sample.show_intermediate_rewards = bool(args.show_intermediate_rewards)
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -177,6 +224,7 @@ def main():
         load_kwargs["variant"] = "fp16"
 
     pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
+    pipe.__call__ = pipeline_using_stein_sdxl.__get__(pipe, pipe.__class__)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.enable_vae_slicing()
@@ -216,117 +264,155 @@ def main():
         dtype=inference_dtype,
     )
 
-    all_latents = []
-    trace_storage_dtype = torch.float16 if inference_dtype == torch.float16 else torch.float32
+    intermediate_pairs = []
 
-    def collect_step_latents(_pipe, _step_idx, _timestep, callback_kwargs):
-        all_latents.append(callback_kwargs["latents"].detach().to("cpu", dtype=trace_storage_dtype))
+    def collect_before_after_latents(_pipe, step_idx, timestep, callback_kwargs):
+        pre = callback_kwargs.get("pre_stein_latents", None)
+        post = callback_kwargs.get("post_stein_latents", None)
+        if pre is not None and post is not None and args.save_intermediate_images:
+            # Save only the first latent for visualization to control storage.
+            intermediate_pairs.append(
+                {
+                    "step_idx": int(step_idx),
+                    "timestep": int(timestep.item() if torch.is_tensor(timestep) else timestep),
+                    "pre": pre[0:1].detach().cpu(),
+                    "post": post[0:1].detach().cpu(),
+                }
+            )
         return callback_kwargs
 
-    with torch.no_grad():
-        result = pipe(
-            prompt=prompts,
-            negative_prompt=args.negative_prompt,
-            num_inference_steps=config.sample.num_steps,
-            guidance_scale=config.sample.guidance_scale,
-            eta=config.sample.eta,
-            output_type="latent",
-            latents=latents_0,
-            callback_on_step_end=collect_step_latents,
-            callback_on_step_end_tensor_inputs=["latents"],
-        )
+    call_kwargs = dict(
+        prompt=prompts,
+        negative_prompt=args.negative_prompt,
+        num_inference_steps=config.sample.num_steps,
+        guidance_scale=config.sample.guidance_scale,
+        eta=config.sample.eta,
+        output_type="latent",
+        latents=latents_0,
+        reward_fn=steer_scorer,
+        num_particles=config.sample.num_particles,
+        batch_p=config.sample.batch_p,
+        stein_step=config.sample.stein_step,
+        stein_loop=config.sample.stein_loop,
+        stein_kernel=config.sample.stein_kernel,
+        stein_adagrad_eps=config.sample.stein_adagrad_eps,
+        stein_adagrad_clip=config.sample.stein_adagrad_clip,
+        kl_coeff=config.sample.kl_coeff,
+        steer_start=config.sample.steer_start,
+        steer_end=config.sample.steer_end,
+        show_intermediate_rewards=config.sample.show_intermediate_rewards,
+        return_dict=False,
+        return_intermediate_rewards=args.save_logs,
+    )
 
-    final_latents = result.images if hasattr(result, "images") else result[0]
+    if args.save_intermediate_images and args.save_logs:
+        call_kwargs["callback_on_step_end"] = collect_before_after_latents
+        call_kwargs["callback_on_step_end_tensor_inputs"] = ["latents", "pre_stein_latents", "post_stein_latents"]
+
+    with torch.no_grad():
+        result = pipe(**call_kwargs)
+
+    if args.save_logs:
+        final_latents = result[0]
+        intermediate_logs = result[1]
+    else:
+        final_latents = result[0]
+        intermediate_logs = None
+
     with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
         final_steer_scores = steer_scorer(final_images, prompts).detach().float().cpu().numpy()
 
-    # Free generation-only modules before the expensive per-step decode+score loop.
-    if device.type == "cuda":
-        release_generation_modules(pipe)
-
-    step_ids = np.arange(1, len(all_latents) + 1)
-    steer_reward_mean_trace = []
-    steer_reward_max_trace = []
-    eval_reward_mean_trace = []
-    eval_reward_max_trace = []
-
-    for step_idx, step_latents_cpu in enumerate(all_latents, start=1):
-        steer_step_scores = []
-        eval_step_scores = []
-
-        for offset in range(0, step_latents_cpu.shape[0], args.trace_decode_batch_size):
-            step_chunk = step_latents_cpu[offset : offset + args.trace_decode_batch_size]
-
-            with torch.no_grad():
-                step_latents = step_chunk.to(device=device, dtype=inference_dtype)
-                step_images = decode_latents_sdxl(pipe, step_latents)
-
-                steer_scores = steer_scorer(step_images, prompts[offset : offset + step_images.shape[0]]).detach().float().cpu()
-                steer_step_scores.append(steer_scores)
-
-                if eval_scorer is not None:
-                    eval_scores = eval_scorer(step_images, prompts[offset : offset + step_images.shape[0]]).detach().float().cpu()
-                    eval_step_scores.append(eval_scores)
-
-            del step_latents, step_images
-
-        steer_scores = torch.cat(steer_step_scores, dim=0)
-        steer_reward_mean_trace.append(steer_scores.mean().item())
-        steer_reward_max_trace.append(steer_scores.max().item())
-
-        log_msg = (
-            f"[step {step_idx:03d}] "
-            f"steer_mean={steer_scores.mean().item():.6f} "
-            f"steer_max={steer_scores.max().item():.6f}"
-        )
-
-        if eval_scorer is not None:
-            eval_scores = torch.cat(eval_step_scores, dim=0)
-            eval_reward_mean_trace.append(eval_scores.mean().item())
-            eval_reward_max_trace.append(eval_scores.max().item())
-            log_msg += (
-                f" | eval_mean={eval_scores.mean().item():.6f}"
-                f" eval_max={eval_scores.max().item():.6f}"
-            )
-
-        del steer_scores
-        if eval_scorer is not None:
-            del eval_scores
-
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        print(log_msg)
-
-    np.save(out_dir / "steer_reward_mean_trace.npy", np.array(steer_reward_mean_trace, dtype=np.float32))
-    np.save(out_dir / "steer_reward_max_trace.npy", np.array(steer_reward_max_trace, dtype=np.float32))
-
-    save_trace_plot(
-        step_ids,
-        steer_reward_mean_trace,
-        steer_reward_max_trace,
-        title=f"Steering reward trace ({config.reward_fn})",
-        ylabel="Reward",
-        out_path=out_dir / "steer_reward_trace.png",
-    )
-
+    final_eval_scores = None
     if eval_scorer is not None:
-        np.save(out_dir / "eval_reward_mean_trace.npy", np.array(eval_reward_mean_trace, dtype=np.float32))
-        np.save(out_dir / "eval_reward_max_trace.npy", np.array(eval_reward_max_trace, dtype=np.float32))
-        save_trace_plot(
-            step_ids,
-            eval_reward_mean_trace,
-            eval_reward_max_trace,
-            title=f"Eval reward trace ({args.eval_reward})",
-            ylabel="Reward",
-            out_path=out_dir / "eval_reward_trace.png",
-        )
+        with torch.no_grad():
+            final_eval_scores = eval_scorer(final_images, prompts).detach().float().cpu().numpy()
 
     for idx, image_tensor in enumerate(final_images):
         score = float(final_steer_scores[idx])
         file_name = f"sample_{idx:02d}_steer_{score:.6f}.png"
         save_tensor_image(image_tensor, out_dir / file_name)
+
+    summary = {
+        "config": args.config,
+        "seed": int(config.seed),
+        "num_steps": int(config.sample.num_steps),
+        "num_particles": int(config.sample.num_particles),
+        "stein_loop": int(config.sample.stein_loop),
+        "stein_step": float(config.sample.stein_step),
+        "steer_start": config.sample.steer_start,
+        "steer_end": config.sample.steer_end,
+        "save_logs": bool(args.save_logs),
+        "final_steer_reward_mean": float(final_steer_scores.mean()),
+        "final_steer_reward_max": float(final_steer_scores.max()),
+        "final_steer_reward_values": [float(v) for v in final_steer_scores.tolist()],
+    }
+
+    if final_eval_scores is not None:
+        summary["final_eval_reward_name"] = args.eval_reward
+        summary["final_eval_reward_mean"] = float(final_eval_scores.mean())
+        summary["final_eval_reward_max"] = float(final_eval_scores.max())
+        summary["final_eval_reward_values"] = [float(v) for v in final_eval_scores.tolist()]
+
+    with open(out_dir / "final_metrics.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    if args.save_logs and intermediate_logs is not None:
+        timesteps = np.array(intermediate_logs.get("timesteps", []), dtype=np.int32)
+        pre_mean = np.array(intermediate_logs.get("pre_steer_mean", []), dtype=np.float32)
+        post_mean = np.array(intermediate_logs.get("post_steer_mean", []), dtype=np.float32)
+        pre_max = np.array(intermediate_logs.get("pre_steer_max", []), dtype=np.float32)
+        post_max = np.array(intermediate_logs.get("post_steer_max", []), dtype=np.float32)
+
+        np.save(out_dir / "steer_timesteps.npy", timesteps)
+        np.save(out_dir / "steer_pre_mean.npy", pre_mean)
+        np.save(out_dir / "steer_post_mean.npy", post_mean)
+        np.save(out_dir / "steer_pre_max.npy", pre_max)
+        np.save(out_dir / "steer_post_max.npy", post_max)
+
+        save_before_after_plot(
+            np.arange(1, len(pre_mean) + 1),
+            pre_mean,
+            post_mean,
+            title=f"Intermediate reward before/after steering ({config.reward_fn}) - mean",
+            out_path=out_dir / "steer_before_after_mean.png",
+            ylabel="Reward",
+        )
+        save_before_after_plot(
+            np.arange(1, len(pre_max) + 1),
+            pre_max,
+            post_max,
+            title=f"Intermediate reward before/after steering ({config.reward_fn}) - max",
+            out_path=out_dir / "steer_before_after_max.png",
+            ylabel="Reward",
+        )
+
+        with open(out_dir / "intermediate_rewards.json", "w") as f:
+            json.dump(intermediate_logs, f, indent=2)
+
+        if args.save_intermediate_images and len(intermediate_pairs) > 0:
+            inter_dir = out_dir / "intermediate_images"
+            inter_dir.mkdir(parents=True, exist_ok=True)
+
+            for item in intermediate_pairs:
+                pre_latent = item["pre"].to(device=device, dtype=inference_dtype)
+                post_latent = item["post"].to(device=device, dtype=inference_dtype)
+                with torch.no_grad():
+                    pre_img = decode_latents_sdxl(pipe, pre_latent)[0]
+                    post_img = decode_latents_sdxl(pipe, post_latent)[0]
+                    pre_score = float(steer_scorer(pre_img.unsqueeze(0), [args.prompt])[0].detach().float().cpu().item())
+                    post_score = float(steer_scorer(post_img.unsqueeze(0), [args.prompt])[0].detach().float().cpu().item())
+
+                step_idx = item["step_idx"]
+                timestep = item["timestep"]
+                save_tensor_image(
+                    pre_img,
+                    inter_dir / f"step_{step_idx:03d}_t{timestep:04d}_before_{pre_score:.6f}.png",
+                )
+                save_tensor_image(
+                    post_img,
+                    inter_dir / f"step_{step_idx:03d}_t{timestep:04d}_after_{post_score:.6f}.png",
+                )
 
     print("Saved outputs to:", out_dir)
     print(
