@@ -312,12 +312,27 @@ def main():
     with torch.no_grad():
         result = pipe(**call_kwargs)
 
-    if args.save_logs:
+    intermediate_logs = None
+    if isinstance(result, dict):
+        final_latents = result.get("images", None)
+        if final_latents is None:
+            raise ValueError("Pipeline dict output does not contain 'images'.")
+        if args.save_logs:
+            intermediate_logs = result.get("intermediate_rewards", None)
+    elif isinstance(result, (tuple, list)):
+        if len(result) == 0:
+            raise ValueError("Pipeline returned an empty tuple/list.")
         final_latents = result[0]
-        intermediate_logs = result[1]
+        if args.save_logs and len(result) > 1:
+            intermediate_logs = result[1]
     else:
-        final_latents = result[0]
-        intermediate_logs = None
+        final_latents = result.images if hasattr(result, "images") else result
+
+    if args.save_logs and intermediate_logs is None:
+        print(
+            "Warning: save_logs=True but intermediate logs were not returned by the pipeline. "
+            "Continuing with final outputs only."
+        )
 
     with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))

@@ -17,6 +17,7 @@ Run the SDXL Stein-guided sampler:
 python examples/sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
+  --eval-reward image_reward \
   --num-steps 80 \
   --guidance-scale 6.0 \
   --num-particles 4 \
@@ -34,6 +35,7 @@ Fast run (skip intermediate logs/plots, but still save final images and rewards)
 python examples/sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
+  --eval-reward image_reward \
   --no-save-logs \
   --output-dir logs/examples/sdxl_stein
 ```
@@ -42,6 +44,7 @@ python examples/sdxl.py \
 - `--num-particles`: number of particles used in Stein updates
 - `--stein-loop`: number of inner Stein loops per steered timestep
 - `--stein-step`: base step size for Stein AdaGrad updates
+- `--eval-reward`: eval scorer used in these examples (`image_reward`)
 - `--steer-start`, `--steer-end`: steering window over inference-step indices (0-based, defaults to full range)
 - `--save-logs` / `--no-save-logs`: toggle intermediate reward logs and plots
 - `--save-intermediate-images`: optionally save before/after steered intermediate images
