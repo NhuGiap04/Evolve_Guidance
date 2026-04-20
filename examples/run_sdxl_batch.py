@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import csv
+
 
 def _supports_color() -> bool:
     return sys.stdout.isatty()
@@ -259,6 +261,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _extract_eval_stats(stdout: str) -> Dict[str, str]:
+    """Parse final eval reward stats from sdxl.py stdout."""
+    # Looks for: Final eval reward stats (image_reward): mean=-0.330566 max=-0.330566
+    result = {"mean": "", "max": ""}
+    for line in stdout.splitlines():
+        if "Final eval reward stats" in line:
+            # Extract mean and max using regex
+            import re
+            m = re.search(r"mean=([\-0-9.eE]+) max=([\-0-9.eE]+)", line)
+            if m:
+                result["mean"] = m.group(1)
+                result["max"] = m.group(2)
+            break
+    return result
+
 def main() -> int:
     args = parse_args()
 
@@ -300,6 +317,7 @@ def main() -> int:
     print()
 
     rows: List[Dict[str, Any]] = []
+    eval_rows: List[Dict[str, Any]] = []
     success_count = 0
 
     batch_start = time.time()
@@ -317,14 +335,19 @@ def main() -> int:
 
         if args.dry_run:
             print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
-            rows.append(
-                {
-                    "index": global_idx,
-                    "status": "DRY",
-                    "elapsed": 0.0,
-                    "prompt": prompt,
-                }
-            )
+            rows.append({
+                "index": global_idx,
+                "status": "DRY",
+                "elapsed": 0.0,
+                "prompt": prompt,
+            })
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "mean": "",
+                "max": "",
+                "status": "DRY",
+            })
             continue
 
         start = time.time()
@@ -336,28 +359,39 @@ def main() -> int:
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
+        eval_stats = _extract_eval_stats(proc.stdout or "")
         if proc.returncode == 0:
             success_count += 1
             status = _c("OK", _Style.GREEN, _Style.BOLD)
-            rows.append(
-                {
-                    "index": global_idx,
-                    "status": "OK",
-                    "elapsed": elapsed,
-                    "prompt": prompt,
-                }
-            )
+            rows.append({
+                "index": global_idx,
+                "status": "OK",
+                "elapsed": elapsed,
+                "prompt": prompt,
+            })
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "mean": eval_stats["mean"],
+                "max": eval_stats["max"],
+                "status": "OK",
+            })
             print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
         else:
             status = _c("FAIL", _Style.RED, _Style.BOLD)
-            rows.append(
-                {
-                    "index": global_idx,
-                    "status": "FAIL",
-                    "elapsed": elapsed,
-                    "prompt": prompt,
-                }
-            )
+            rows.append({
+                "index": global_idx,
+                "status": "FAIL",
+                "elapsed": elapsed,
+                "prompt": prompt,
+            })
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "mean": eval_stats["mean"],
+                "max": eval_stats["max"],
+                "status": "FAIL",
+            })
             print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
             stderr_tail = (proc.stderr or "").splitlines()[-20:]
             if stderr_tail:
@@ -374,12 +408,21 @@ def main() -> int:
     total_elapsed = time.time() - batch_start
     _print_summary(rows)
 
+    # Save eval summary CSV
+    csv_path = args.output_dir / "batch_eval_summary.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["index", "prompt", "mean", "max", "status"])
+        writer.writeheader()
+        for row in eval_rows:
+            writer.writerow(row)
+
     print()
     _title("Result")
     print(f"Succeeded : {success_count}/{len(rows)}")
     print(f"Failed    : {len(rows) - success_count}")
     print(f"Wall time : {total_elapsed:.2f}s")
     print(f"Logs      : {log_dir}")
+    print(f"Eval CSV  : {csv_path}")
 
     return 0 if success_count == len(rows) else 1
 
