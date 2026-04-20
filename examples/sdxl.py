@@ -299,10 +299,9 @@ def main():
         kl_coeff=config.sample.kl_coeff,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
-        show_intermediate_rewards=config.sample.show_intermediate_rewards,
+        intermediate_rewards=config.sample.intermediate_rewards,
         return_all_particles=True,
         return_dict=False,
-        return_intermediate_rewards=True,
     )
 
     if args.save_intermediate_images:

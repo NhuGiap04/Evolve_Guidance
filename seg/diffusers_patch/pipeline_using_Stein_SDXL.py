@@ -206,14 +206,22 @@ def pipeline_using_stein_sdxl(
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
-    return_intermediate_rewards: bool = False,
-    show_intermediate_rewards: bool = False,
+    intermediate_rewards: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
     """Run SDXL denoising with optional Stein particle transport guidance."""
 
     callback = kwargs.pop("callback", None)
     callback_steps = kwargs.pop("callback_steps", None)
+
+    legacy_return_intermediate_rewards = kwargs.pop("return_intermediate_rewards", None)
+    legacy_show_intermediate_rewards = kwargs.pop("show_intermediate_rewards", None)
+    if legacy_return_intermediate_rewards is not None or legacy_show_intermediate_rewards is not None:
+        intermediate_rewards = (
+            intermediate_rewards
+            or bool(legacy_return_intermediate_rewards)
+            or bool(legacy_show_intermediate_rewards)
+        )
 
     if callback is not None:
         deprecate(
@@ -459,7 +467,7 @@ def pipeline_using_stein_sdxl(
     use_stein = reward_fn is not None and stein_loop > 0 and stein_step > 0
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
 
-    intermediate_rewards: Dict[str, List[float]] = {
+    intermediate_rewards_data: Dict[str, List[float]] = {
         "step_indices": [],
         "timesteps": [],
         "pre_steer_mean": [],
@@ -631,12 +639,12 @@ def pipeline_using_stein_sdxl(
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents.detach().clone()
 
-                should_log_rewards = return_intermediate_rewards or show_intermediate_rewards
+                should_log_rewards = intermediate_rewards
                 pre_reward = None
 
                 if should_log_rewards:
-                    intermediate_rewards["step_indices"].append(float(i))
-                    intermediate_rewards["timesteps"].append(float(t_int))
+                    intermediate_rewards_data["step_indices"].append(float(i))
+                    intermediate_rewards_data["timesteps"].append(float(t_int))
 
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
 
@@ -677,14 +685,14 @@ def pipeline_using_stein_sdxl(
                     if pre_reward is None:
                         pre_reward = _compute_reward(latents, t)
 
-                    intermediate_rewards["pre_steer_mean"].append(float(pre_reward.mean().item()))
-                    intermediate_rewards["pre_steer_max"].append(float(pre_reward.max().item()))
+                    intermediate_rewards_data["pre_steer_mean"].append(float(pre_reward.mean().item()))
+                    intermediate_rewards_data["pre_steer_max"].append(float(pre_reward.max().item()))
 
                     post_reward = _compute_reward(latents, t)
-                    intermediate_rewards["post_steer_mean"].append(float(post_reward.mean().item()))
-                    intermediate_rewards["post_steer_max"].append(float(post_reward.max().item()))
+                    intermediate_rewards_data["post_steer_mean"].append(float(post_reward.mean().item()))
+                    intermediate_rewards_data["post_steer_max"].append(float(post_reward.max().item()))
 
-                    if show_intermediate_rewards:
+                    if intermediate_rewards:
                         print(
                             f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
                             f"pre_max={pre_reward.max().item():.6f} "
@@ -773,8 +781,8 @@ def pipeline_using_stein_sdxl(
             gather_idx = base_idx * num_particles + best_idx
             latents = latents[gather_idx]
 
-            if return_intermediate_rewards:
-                intermediate_rewards["final_best_particle_reward"] = [
+            if intermediate_rewards:
+                intermediate_rewards_data["final_best_particle_reward"] = [
                     float(v) for v in reward_grouped[base_idx, best_idx].detach().float().cpu().tolist()
                 ]
         else:
@@ -812,11 +820,11 @@ def pipeline_using_stein_sdxl(
     self.maybe_free_model_hooks()
 
     if not return_dict:
-        if return_intermediate_rewards:
-            return (image, intermediate_rewards)
+        if intermediate_rewards:
+            return (image, intermediate_rewards_data)
         return (image,)
 
-    if return_intermediate_rewards:
-        return {"images": image, "intermediate_rewards": intermediate_rewards}
+    if intermediate_rewards:
+        return {"images": image, "intermediate_rewards": intermediate_rewards_data}
 
     return StableDiffusionXLPipelineOutput(images=image)
