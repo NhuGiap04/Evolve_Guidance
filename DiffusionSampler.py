@@ -129,8 +129,6 @@ class DiffusionModelSampler:
                 self.config.pretrained.model, 
                 torch_dtype=torch.float16, variant="fp16", use_safetensors=True
             ).to(self.accelerator.device)
-            # Keep using the repository-local SDXL call implementation.
-            pipeline.__call__ = pipeline_using_stein_sdxl.__get__(pipeline, pipeline.__class__)
         else:
             pipeline = StableDiffusionPipeline.from_pretrained(
                 self.config.pretrained.model, 
@@ -234,7 +232,8 @@ class DiffusionModelSampler:
                 # Sample images
                 with self.autocast():
                     if "xl" in self.config.pretrained.model:
-                        result = self.pipeline(
+                        result = pipeline_using_stein_sdxl(
+                            self.pipeline,
                             prompt=prompts_batch,
                             num_inference_steps=self.config.sample.num_steps,
                             guidance_scale=self.config.sample.guidance_scale,

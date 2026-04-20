@@ -231,7 +231,6 @@ def main():
         load_kwargs["variant"] = "fp16"
 
     pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
-    pipe.__call__ = pipeline_using_stein_sdxl.__get__(pipe, pipe.__class__)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.enable_vae_slicing()
@@ -310,7 +309,8 @@ def main():
         call_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
 
     with torch.no_grad():
-        result = pipe(**call_kwargs)
+        # Call the local Stein implementation explicitly so traces/logs are produced.
+        result = pipeline_using_stein_sdxl(pipe, **call_kwargs)
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
     intermediate_logs = result[1] if isinstance(result, (tuple, list)) and len(result) > 1 else {}
