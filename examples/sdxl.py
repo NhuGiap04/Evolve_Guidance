@@ -300,6 +300,7 @@ def main():
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         show_intermediate_rewards=config.sample.show_intermediate_rewards,
+        return_all_particles=True,
         return_dict=False,
         return_intermediate_rewards=True,
     )
@@ -400,7 +401,8 @@ def main():
 
     if eval_scorer is not None:
         with torch.no_grad():
-            final_eval_scores = eval_scorer(final_images, prompts).detach().float().cpu().numpy()
+            eval_prompts = [args.prompt] * final_images.shape[0]
+            final_eval_scores = eval_scorer(final_images, eval_prompts).detach().float().cpu().numpy()
         print(
             f"Final eval reward stats ({args.eval_reward}): "
             f"mean={final_eval_scores.mean():.6f} max={final_eval_scores.max():.6f}"

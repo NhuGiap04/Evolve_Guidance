@@ -205,7 +205,7 @@ def pipeline_using_stein_sdxl(
     kl_coeff: float = 1.0,
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
-    return_all_particles: bool = False,
+    return_all_particles: bool = True,
     return_intermediate_rewards: bool = False,
     show_intermediate_rewards: bool = False,
     **kwargs,
@@ -579,10 +579,11 @@ def pipeline_using_stein_sdxl(
     def _compute_reward_grad(
         current_latents: torch.Tensor,
         t: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return_rewards: bool = False,
+    ) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
         if reward_fn is None or prompt_particles is None:
             zero_rewards = torch.zeros(current_latents.shape[0], device=current_latents.device, dtype=current_latents.dtype)
-            return zero_rewards, torch.zeros_like(current_latents)
+            return (zero_rewards if return_rewards else None), torch.zeros_like(current_latents)
 
         all_rewards: List[torch.Tensor] = []
         all_grads: List[torch.Tensor] = []
@@ -606,10 +607,12 @@ def pipeline_using_stein_sdxl(
                 if grad_chunk is None:
                     grad_chunk = torch.zeros_like(lat_chunk)
 
-            all_rewards.append(scaled_reward_chunk.detach())
+            if return_rewards:
+                all_rewards.append(reward_chunk.detach())
             all_grads.append(grad_chunk.detach())
 
-        return torch.cat(all_rewards, dim=0), torch.cat(all_grads, dim=0)
+        rewards_out = torch.cat(all_rewards, dim=0) if return_rewards else None
+        return rewards_out, torch.cat(all_grads, dim=0)
 
     # Stein loop
     self._num_timesteps = len(timesteps)
@@ -628,21 +631,28 @@ def pipeline_using_stein_sdxl(
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents.detach().clone()
 
-                if return_intermediate_rewards or show_intermediate_rewards:
-                    pre_reward = _compute_reward(latents, t)
+                should_log_rewards = return_intermediate_rewards or show_intermediate_rewards
+                pre_reward = None
+
+                if should_log_rewards:
                     intermediate_rewards["step_indices"].append(float(i))
                     intermediate_rewards["timesteps"].append(float(t_int))
-                    intermediate_rewards["pre_steer_mean"].append(float(pre_reward.mean().item()))
-                    intermediate_rewards["pre_steer_max"].append(float(pre_reward.max().item()))
 
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
 
-                for _ in range(stein_loop):
+                for loop_idx in range(stein_loop):
                     noise_pred_for_score = _predict_noise(latents, t)
                     _, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
                     prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
 
-                    _, reward_grad = _compute_reward_grad(latents, t)
+                    reward_values, reward_grad = _compute_reward_grad(
+                        latents,
+                        t,
+                        return_rewards=should_log_rewards and loop_idx == 0,
+                    )
+                    if should_log_rewards and loop_idx == 0 and reward_values is not None:
+                        pre_reward = reward_values
+
                     score_q = prior_score.float() + reward_grad.float()
 
                     if stein_kernel != "rbf":
@@ -663,7 +673,13 @@ def pipeline_using_stein_sdxl(
 
                     latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
 
-                if return_intermediate_rewards or show_intermediate_rewards:
+                if should_log_rewards:
+                    if pre_reward is None:
+                        pre_reward = _compute_reward(latents, t)
+
+                    intermediate_rewards["pre_steer_mean"].append(float(pre_reward.mean().item()))
+                    intermediate_rewards["pre_steer_max"].append(float(pre_reward.max().item()))
+
                     post_reward = _compute_reward(latents, t)
                     intermediate_rewards["post_steer_mean"].append(float(post_reward.mean().item()))
                     intermediate_rewards["post_steer_max"].append(float(post_reward.max().item()))
