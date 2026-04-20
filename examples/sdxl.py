@@ -1,9 +1,9 @@
 import argparse
+import csv
 import gc
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
@@ -148,9 +148,9 @@ def decode_latents_sdxl(pipe, latents):
 
 
 def save_tensor_image(image_tensor, path):
-    image_np = (image_tensor.detach().cpu().numpy() * 255.0).round().clip(0, 255).astype(np.uint8)
-    image_np = image_np.transpose(1, 2, 0)
-    Image.fromarray(image_np).save(path)
+    image_uint8 = (image_tensor.detach().cpu().clamp(0, 1) * 255.0).round().to(torch.uint8)
+    image_hwc = image_uint8.permute(1, 2, 0)
+    Image.fromarray(image_hwc.numpy()).save(path)
 
 
 def save_before_after_plot(step_ids, pre_values, post_values, title, ylabel, out_path):
@@ -320,48 +320,50 @@ def main():
         final_steer_scores = steer_scorer(
             final_images,
             [args.prompt] * final_images.shape[0],
-        ).detach().float().cpu().numpy()
+        ).detach().float().cpu()
 
-    step_indices = np.array(intermediate_logs.get("step_indices", []), dtype=np.int32)
-    timesteps = np.array(intermediate_logs.get("timesteps", []), dtype=np.int32)
-    pre_mean = np.array(intermediate_logs.get("pre_steer_mean", []), dtype=np.float32)
-    post_mean = np.array(intermediate_logs.get("post_steer_mean", []), dtype=np.float32)
-    pre_max = np.array(intermediate_logs.get("pre_steer_max", []), dtype=np.float32)
-    post_max = np.array(intermediate_logs.get("post_steer_max", []), dtype=np.float32)
+    step_indices = [int(value) for value in intermediate_logs.get("step_indices", [])]
+    timesteps = [int(value) for value in intermediate_logs.get("timesteps", [])]
+    pre_mean = [float(value) for value in intermediate_logs.get("pre_steer_mean", [])]
+    post_mean = [float(value) for value in intermediate_logs.get("post_steer_mean", [])]
+    pre_max = [float(value) for value in intermediate_logs.get("pre_steer_max", [])]
+    post_max = [float(value) for value in intermediate_logs.get("post_steer_max", [])]
+    trace_len = min(len(step_indices), len(timesteps), len(pre_mean), len(post_mean), len(pre_max), len(post_max))
 
-    for idx in range(len(pre_mean)):
+    for idx in range(trace_len):
         print(
-            f"[steer step {int(step_indices[idx]):03d} | t={int(timesteps[idx]):04d}] "
+            f"[steer step {step_indices[idx]:03d} | t={timesteps[idx]:04d}] "
             f"mean: {pre_mean[idx]:.6f} -> {post_mean[idx]:.6f} "
             f"(delta={post_mean[idx] - pre_mean[idx]:+.6f}) | "
             f"max: {pre_max[idx]:.6f} -> {post_max[idx]:.6f} "
             f"(delta={post_max[idx] - pre_max[idx]:+.6f})"
         )
 
-    np.save(out_dir / "steer_step_indices.npy", step_indices)
-    np.save(out_dir / "steer_timesteps.npy", timesteps)
-    np.save(out_dir / "steer_pre_mean.npy", pre_mean)
-    np.save(out_dir / "steer_post_mean.npy", post_mean)
-    np.save(out_dir / "steer_pre_max.npy", pre_max)
-    np.save(out_dir / "steer_post_max.npy", post_max)
+    trace_csv_path = out_dir / "steer_trace.csv"
+    with trace_csv_path.open("w", encoding="utf-8", newline="") as trace_file:
+        writer = csv.writer(trace_file)
+        writer.writerow(["step_index", "timestep", "pre_steer_mean", "post_steer_mean", "pre_steer_max", "post_steer_max"])
+        for idx in range(trace_len):
+            writer.writerow([step_indices[idx], timesteps[idx], pre_mean[idx], post_mean[idx], pre_max[idx], post_max[idx]])
 
-    plot_x = np.arange(1, len(pre_mean) + 1)
-    save_before_after_plot(
-        plot_x,
-        pre_mean,
-        post_mean,
-        title=f"Before/After steering reward ({config.reward_fn}) - mean",
-        ylabel="Reward",
-        out_path=out_dir / "steer_before_after_mean.png",
-    )
-    save_before_after_plot(
-        plot_x,
-        pre_max,
-        post_max,
-        title=f"Before/After steering reward ({config.reward_fn}) - max",
-        ylabel="Reward",
-        out_path=out_dir / "steer_before_after_max.png",
-    )
+    if trace_len > 0:
+        plot_x = list(range(1, trace_len + 1))
+        save_before_after_plot(
+            plot_x,
+            pre_mean[:trace_len],
+            post_mean[:trace_len],
+            title=f"Before/After steering reward ({config.reward_fn}) - mean",
+            ylabel="Reward",
+            out_path=out_dir / "steer_before_after_mean.png",
+        )
+        save_before_after_plot(
+            plot_x,
+            pre_max[:trace_len],
+            post_max[:trace_len],
+            title=f"Before/After steering reward ({config.reward_fn}) - max",
+            ylabel="Reward",
+            out_path=out_dir / "steer_before_after_max.png",
+        )
 
     if args.save_intermediate_images and len(all_latents) > 0:
         for step_idx, step_latents_cpu in enumerate(all_latents, start=1):
@@ -401,16 +403,16 @@ def main():
     if eval_scorer is not None:
         with torch.no_grad():
             eval_prompts = [args.prompt] * final_images.shape[0]
-            final_eval_scores = eval_scorer(final_images, eval_prompts).detach().float().cpu().numpy()
+            final_eval_scores = eval_scorer(final_images, eval_prompts).detach().float().cpu()
         print(
             f"Final eval reward stats ({args.eval_reward}): "
-            f"mean={final_eval_scores.mean():.6f} max={final_eval_scores.max():.6f}"
+            f"mean={final_eval_scores.mean().item():.6f} max={final_eval_scores.max().item():.6f}"
         )
 
     print("Saved outputs to:", out_dir)
     print(
         "Final steering reward stats: "
-        f"mean={final_steer_scores.mean():.6f} max={final_steer_scores.max():.6f}"
+        f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"
     )
 
 

@@ -109,6 +109,5 @@ Batch outputs:
 Saved in `logs/sdxl/<config>_seed<seed>`:
 
 - Final images (`sample_*.png`)
-- Reward traces (`steer_pre_mean.npy`, `steer_post_mean.npy`, `steer_pre_max.npy`, `steer_post_max.npy`)
+- Reward traces (`steer_trace.csv`)
 - Reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`)
-
