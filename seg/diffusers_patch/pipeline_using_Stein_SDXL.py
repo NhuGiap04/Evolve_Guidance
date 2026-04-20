@@ -468,18 +468,63 @@ def pipeline_using_stein_sdxl(
         "post_steer_max": [],
     }
 
-    def _predict_noise(current_latents: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def _slice_condition_tensor(
+        condition: torch.Tensor,
+        start_idx: Optional[int],
+        end_idx: Optional[int],
+    ) -> torch.Tensor:
+        if start_idx is None or end_idx is None:
+            return condition
+
+        if self.do_classifier_free_guidance:
+            expected_cfg_batch = expected_particle_batch * 2
+            if condition.shape[0] == expected_cfg_batch:
+                condition_uncond = condition[:expected_particle_batch]
+                condition_text = condition[expected_particle_batch:]
+                return torch.cat(
+                    [
+                        condition_uncond[start_idx:end_idx],
+                        condition_text[start_idx:end_idx],
+                    ],
+                    dim=0,
+                )
+            raise ValueError(
+                "Condition batch does not match classifier-free guidance layout: "
+                f"got {condition.shape[0]}, expected {expected_cfg_batch}."
+            )
+
+        if condition.shape[0] == expected_particle_batch:
+            return condition[start_idx:end_idx]
+
+        raise ValueError(
+            "Condition batch does not match particle batch layout: "
+            f"got {condition.shape[0]}, expected {expected_particle_batch}."
+        )
+
+    def _predict_noise(
+        current_latents: torch.Tensor,
+        t: torch.Tensor,
+        start_idx: Optional[int] = None,
+        end_idx: Optional[int] = None,
+    ) -> torch.Tensor:
         latent_model_input = torch.cat([current_latents] * 2) if self.do_classifier_free_guidance else current_latents
         latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-        added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+        prompt_embeds_local = _slice_condition_tensor(prompt_embeds, start_idx, end_idx)
+        add_text_embeds_local = _slice_condition_tensor(add_text_embeds, start_idx, end_idx)
+        add_time_ids_local = _slice_condition_tensor(add_time_ids, start_idx, end_idx)
+
+        added_cond_kwargs = {"text_embeds": add_text_embeds_local, "time_ids": add_time_ids_local}
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            added_cond_kwargs["image_embeds"] = image_embeds
+            added_cond_kwargs["image_embeds"] = [
+                _slice_condition_tensor(embed, start_idx, end_idx)
+                for embed in image_embeds
+            ]
 
         noise_pred_local = self.unet(
             latent_model_input,
             t,
-            encoder_hidden_states=prompt_embeds,
+            encoder_hidden_states=prompt_embeds_local,
             timestep_cond=timestep_cond,
             cross_attention_kwargs=self.cross_attention_kwargs,
             added_cond_kwargs=added_cond_kwargs,
@@ -519,7 +564,7 @@ def pipeline_using_stein_sdxl(
             lat_chunk = current_latents[start_idx:end_idx]
 
             with torch.no_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t)
+                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
                 pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
@@ -547,7 +592,7 @@ def pipeline_using_stein_sdxl(
             lat_chunk = current_latents[start_idx:end_idx].detach().requires_grad_(True)
 
             with torch.enable_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t)
+                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
                 pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
