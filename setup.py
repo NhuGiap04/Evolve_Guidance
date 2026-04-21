@@ -7,7 +7,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "numba==0.60.0",
-        "numpy==2.0.0",
+        "numpy<2",
         "scipy==1.14.0",
         "matplotlib",
         "ml-collections==0.1.1",

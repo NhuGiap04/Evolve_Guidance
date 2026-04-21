@@ -631,7 +631,6 @@ def pipeline_using_stein_sdxl(
 
             t_int = _to_timestep_int(t)
             is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
-
             pre_stein_latents = None
             post_stein_latents = None
 
@@ -776,9 +775,9 @@ def pipeline_using_stein_sdxl(
                 final_particle_rewards = final_particle_rewards.to(device=latents.device, dtype=latents.dtype).flatten()
 
             reward_grouped = final_particle_rewards.view(base_sample_count, num_particles)
-            best_idx = reward_grouped.argmax(dim=1)
-            base_idx = torch.arange(base_sample_count, device=latents.device)
-            gather_idx = base_idx * num_particles + best_idx
+            best_idx = reward_grouped.argmax(dim=1) # shape (base_sample_count,)  
+            base_idx = torch.arange(base_sample_count, device=latents.device) # shape (base_sample_count,)
+            gather_idx = base_idx * num_particles + best_idx # gather indices of shape (base_sample_count,)
             latents = latents[gather_idx]
 
             if intermediate_rewards:
@@ -789,6 +788,8 @@ def pipeline_using_stein_sdxl(
             latents = latents.view(base_sample_count, num_particles, *latents.shape[1:])[:, 0]
 
     if output_type != "latent":
+        ### Decode latents to images
+
         needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
 
         if needs_upcasting:
@@ -799,7 +800,7 @@ def pipeline_using_stein_sdxl(
 
         has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
         has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
-        if has_latents_mean and has_latents_std:
+        if has_latents_mean and has_latents_std: ## Support VAE configs that specify both mean and std for latents, in which case we assume the latents are normalized and need to be un-normalized before decoding. This is needed for compatibility with certain VAE implementations (e.g., from CompVis) and is a no-op for VAEs that do not specify these values.
             latents_mean = torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1).to(latents.device, latents.dtype)
             latents_std = torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1).to(latents.device, latents.dtype)
             latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean

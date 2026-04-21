@@ -7,6 +7,7 @@ Stein-guided SDXL sampling for reward optimization.
 ```bash
 pip install -e .
 pip install --no-deps image-reward
+pip install "numpy<2" lpips
 ```
 
 ## Quick Start
@@ -88,6 +89,21 @@ Useful flags:
 - `--stop-on-error`: stop on first failed prompt.
 - `--dry-run`: print commands without running them.
 - `--save-intermediate-images --trace-decode-batch-size 1`: save step images for each prompt.
+
+LPIPS evaluation against reference images:
+
+```bash
+python examples/sdxl.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --eval-reward lpips \
+  --lpips-ref-dir path/to/reference_images \
+  --lpips-net alex \
+  --output-dir logs/sdxl_lpips
+```
+
+For LPIPS mode, place at least `batch_size` reference images in `--lpips-ref-dir`.
+Files are matched in sorted filename order and resized to the generated image size.
 
 Batch outputs:
 

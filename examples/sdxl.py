@@ -4,6 +4,8 @@ import gc
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import lpips
+import numpy as np
 import torch
 from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
@@ -13,6 +15,39 @@ from seg.diffusers_patch.pipeline_using_Stein_SDXL import pipeline_using_stein_s
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
+
+
+def _to_lpips_input(images):
+    if images.min() < 0:
+        return images.clamp(-1, 1)
+    return (images * 2 - 1).clamp(-1, 1)
+
+
+def load_reference_images(ref_dir, expected_count, target_size_hw, device, dtype):
+    ref_path = Path(ref_dir)
+    if not ref_path.exists() or not ref_path.is_dir():
+        raise ValueError(f"LPIPS reference directory not found: {ref_dir}")
+
+    image_paths = [
+        p for p in sorted(ref_path.iterdir())
+        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    ]
+    if len(image_paths) < expected_count:
+        raise ValueError(
+            f"LPIPS requires at least {expected_count} reference images in {ref_dir}, found {len(image_paths)}."
+        )
+
+    target_h, target_w = target_size_hw
+    loaded = []
+    used_paths = image_paths[:expected_count]
+    for image_path in used_paths:
+        with Image.open(image_path) as img:
+            image_rgb = img.convert("RGB").resize((target_w, target_h), Image.BICUBIC)
+        image_tensor = torch.from_numpy(np.asarray(image_rgb)).permute(2, 0, 1).float() / 255.0
+        loaded.append(image_tensor)
+
+    refs = torch.stack(loaded, dim=0).to(device=device, dtype=dtype)
+    return refs, used_paths
 
 
 def parse_args():
@@ -48,8 +83,21 @@ def parse_args():
         "--eval-reward",
         type=str,
         default="image_reward",
-        choices=["none", "clip", "pick", "image_reward"],
+        choices=["none", "clip", "pick", "image_reward", "lpips"],
         help="Optional second reward model for tracing decoded steps.",
+    )
+    parser.add_argument(
+        "--lpips-ref-dir",
+        type=str,
+        default=None,
+        help="Directory of reference images for LPIPS evaluation (sorted order, one per sample).",
+    )
+    parser.add_argument(
+        "--lpips-net",
+        type=str,
+        default="alex",
+        choices=["alex", "vgg", "squeeze"],
+        help="LPIPS backbone network.",
     )
     parser.add_argument(
         "--device",
@@ -245,7 +293,7 @@ def main():
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     eval_scorer = None
-    if args.eval_reward != "none":
+    if args.eval_reward not in {"none", "lpips"}:
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
 
     out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
@@ -400,7 +448,40 @@ def main():
         file_name = f"sample_{idx:02d}_steer_{score:.6f}.png"
         save_tensor_image(image_tensor, out_dir / file_name)
 
-    if eval_scorer is not None:
+    if args.eval_reward == "lpips":
+        if not args.lpips_ref_dir:
+            raise ValueError("--lpips-ref-dir is required when --eval-reward lpips is selected.")
+
+        with torch.no_grad():
+            reference_images, reference_paths = load_reference_images(
+                ref_dir=args.lpips_ref_dir,
+                expected_count=final_images.shape[0],
+                target_size_hw=(final_images.shape[-2], final_images.shape[-1]),
+                device=device,
+                dtype=inference_dtype,
+            )
+            lpips_metric = lpips.LPIPS(net=args.lpips_net).to(device)
+            lpips_values = lpips_metric(
+                _to_lpips_input(final_images).to(dtype=torch.float32),
+                _to_lpips_input(reference_images).to(dtype=torch.float32),
+            ).flatten().detach().float().cpu()
+
+        lpips_csv_path = out_dir / "lpips_scores.csv"
+        with lpips_csv_path.open("w", encoding="utf-8", newline="") as lpips_file:
+            writer = csv.writer(lpips_file)
+            writer.writerow(["sample_index", "reference_image", "lpips_distance"])
+            for idx, score in enumerate(lpips_values.tolist()):
+                writer.writerow([idx, reference_paths[idx].name, score])
+
+        print(
+            "Final LPIPS stats (lower is better): "
+            f"mean={lpips_values.mean().item():.6f} "
+            f"min={lpips_values.min().item():.6f} "
+            f"max={lpips_values.max().item():.6f}"
+        )
+        print("Saved LPIPS scores to:", lpips_csv_path)
+
+    elif eval_scorer is not None:
         with torch.no_grad():
             eval_prompts = [args.prompt] * final_images.shape[0]
             final_eval_scores = eval_scorer(final_images, eval_prompts).detach().float().cpu()
