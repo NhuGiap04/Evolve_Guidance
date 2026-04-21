@@ -634,6 +634,8 @@ def pipeline_using_stein_sdxl(
 
             pre_stein_latents = None
             post_stein_latents = None
+            pre_stein_pred_x0 = None
+            post_stein_pred_x0 = None
 
             if is_steered_step:
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
@@ -650,7 +652,9 @@ def pipeline_using_stein_sdxl(
 
                 for loop_idx in range(stein_loop):
                     noise_pred_for_score = _predict_noise(latents, t)
-                    _, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
+                    pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
+                    if loop_idx == 0:
+                        pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
                     prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
 
                     reward_values, reward_grad = _compute_reward_grad(
@@ -737,6 +741,8 @@ def pipeline_using_stein_sdxl(
             pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t**2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
             pred_x0, _, _ = _predict_x0(latents, t_int, noise_pred)
+            if is_steered_step:
+                post_stein_pred_x0 = pred_x0.detach().clone()
 
             latents_dtype = latents.dtype
             
@@ -751,6 +757,8 @@ def pipeline_using_stein_sdxl(
 
             if callback_on_step_end is not None:
                 callback_kwargs = {key: locals()[key] for key in callback_on_step_end_tensor_inputs if key in locals()}
+                callback_kwargs["pre_stein_pred_x0"] = pre_stein_pred_x0
+                callback_kwargs["post_stein_pred_x0"] = post_stein_pred_x0
                 callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
                 if callback_outputs is not None:
                     latents = callback_outputs.pop("latents", latents)

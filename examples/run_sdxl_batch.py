@@ -161,6 +161,9 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
         cmd.append("--save-intermediate-images")
         _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
         _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
+    if args.save_intermediate_rewards:
+        cmd.append("--save-intermediate-rewards")
+    _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
 
     return cmd
 
@@ -244,7 +247,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steer-end", type=int, default=None)
 
     parser.add_argument("--save-intermediate-images", action="store_true")
+    parser.add_argument("--save-intermediate-rewards", action="store_true")
     parser.add_argument("--trace-decode-batch-size", type=int, default=None)
+    parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
 
     parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")

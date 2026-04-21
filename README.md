@@ -1,4 +1,4 @@
-# Self-Evolve Guidance
+# Self-Improving Guidance
 
 Stein-guided SDXL sampling for reward optimization.
 
@@ -27,33 +27,9 @@ python examples/sdxl.py \
   --output-dir logs/sdxl
 ```
 
-## Save Intermediate Images
-
-Add these flags to also save decoded images from denoising steps:
-
-```bash
-python examples/sdxl.py \
-  --config pick \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --eval-reward image_reward \
-  --num-steps 80 \
-  --num-particles 4 \
-  --batch-p 1 \
-  --stein-loop 1 \
-  --stein-step 0.02 \
-  --steer-start 20 \
-  --steer-end 60 \
-  --save-intermediate-images \
-  --trace-decode-batch-size 1 \
-  --intermediate-max-samples 2 \
-  --output-dir logs/sdxl
-```
-
 ## Batch Run Multiple Prompts
 
 Use `examples/run_sdxl_batch.py` to run `examples/sdxl.py` across prompts from a `.txt` or `.json` file.
-
-Run from `.txt` (one prompt per line):
 
 ```bash
 python examples/run_sdxl_batch.py \
@@ -65,21 +41,11 @@ python examples/run_sdxl_batch.py \
   --num-particles 4 \
   --batch-p 1 \
   --stein-loop 1 \
-  --stein-step 0.02 \
+  --stein-step 0.005 \
   --steer-start 20 \
   --steer-end 60 \
+  --save-intermediate-rewards --trace-eval-batch 1 \
   --output-dir logs/sdxl_batch
-```
-
-Run from `.json`:
-
-```bash
-python examples/run_sdxl_batch.py \
-  --prompts-file prompts/benchmark_ir.json \
-  --config seg \
-  --eval-reward image_reward \
-  --device cuda \
-  --output-dir logs/sdxl_batch_json
 ```
 
 Useful flags:
@@ -88,6 +54,7 @@ Useful flags:
 - `--stop-on-error`: stop on first failed prompt.
 - `--dry-run`: print commands without running them.
 - `--save-intermediate-images --trace-decode-batch-size 1`: save step images for each prompt.
+- `--save-intermediate-rewards --trace-eval-batch 1`: save deferred intermediate reward traces.
 
 Batch outputs:
 
@@ -108,6 +75,8 @@ Batch outputs:
 
 Saved in `logs/sdxl/<config>_seed<seed>`:
 
-- Final images (`sample_*.png`)
-- Reward traces (`steer_trace.csv`)
-- Reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`)
+- Final particle images (`sample_*.png`)
+- Final reward summary (`final_rewards.json`)
+- Deferred reward traces (`steer_trace.csv`) when `--save-intermediate-rewards` is enabled
+- Steer reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`) when enabled
+- Optional eval reward plots (`eval_before_after_mean.png`, `eval_before_after_max.png`) when enabled
