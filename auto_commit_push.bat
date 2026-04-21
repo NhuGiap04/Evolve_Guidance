@@ -18,8 +18,11 @@ if not defined BRANCH (
   exit /b 1
 )
 
-set MSG=%*
-if "%MSG%"=="" set MSG=Auto commit %DATE% %TIME%
+if "%~1"=="" (
+  set "MSG=Auto commit %DATE% %TIME%"
+) else (
+  set "MSG=%~1"
+)
 
 echo [INFO] Branch: %BRANCH%
 echo [INFO] Staging changes...
@@ -30,7 +33,7 @@ if errorlevel 1 (
 )
 
 git diff --cached --quiet
-if not errorlevel 1 (
+if errorlevel 1 (
   echo [INFO] Creating commit...
   git commit -m "%MSG%"
   if errorlevel 1 (
@@ -38,8 +41,7 @@ if not errorlevel 1 (
     exit /b 1
   )
 ) else (
-  echo [INFO] No staged changes to commit.
-  exit /b 0
+  echo [INFO] No staged changes to commit. Skipping commit.
 )
 
 echo [INFO] Pushing to origin/%BRANCH%...
