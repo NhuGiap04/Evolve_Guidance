@@ -14,7 +14,7 @@ pip install --no-deps image-reward
 Run one prompt:
 
 ```bash
-python examples/sdxl.py \
+python examples/gradient_sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
   --eval-reward image_reward \
@@ -27,12 +27,10 @@ python examples/sdxl.py \
   --output-dir logs/sdxl
 ```
 
-## Batch Run Multiple Prompts
-
-Use `examples/run_sdxl_batch.py` to run `examples/sdxl.py` across prompts from a `.txt` or `.json` file.
+Run Multiple Prompts
 
 ```bash
-python examples/run_sdxl_batch.py \
+python runs/gradient_sdxl_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
   --eval-reward image_reward \
@@ -61,7 +59,7 @@ Batch outputs:
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
 
-## Main Options
+### Main Options
 
 - `--config`: reward preset (`pick`, `clip`, `seg`)
 - `--prompt`: text prompt
@@ -71,7 +69,7 @@ Batch outputs:
 - `--stein-step`: Stein step size
 - `--steer-start`, `--steer-end`: steering window (0-based step index)
 
-## Outputs
+### Outputs
 
 Saved in `logs/sdxl/<config>_seed<seed>`:
 

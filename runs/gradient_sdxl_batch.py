@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for examples/sdxl.py using prompts from .txt or .json."""
+"""Batch runner for examples/gradient_sdxl.py using prompts from .txt or .json."""
 
 import argparse
 import json
@@ -202,6 +202,8 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
         status = r[1]
         if status == "OK":
             r[1] = _c(status, _Style.GREEN, _Style.BOLD)
+        elif status == "DRY":
+            r[1] = _c(status, _Style.YELLOW, _Style.BOLD)
         else:
             r[1] = _c(status, _Style.RED, _Style.BOLD)
         print(format_row(r))
@@ -209,16 +211,23 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run examples/sdxl.py over prompts from a .txt or .json file.",
+        description="Run examples/gradient_sdxl.py over prompts from a .txt or .json file.",
     )
     parser.add_argument("--prompts-file", type=Path, required=True, help="Path to .txt or .json prompts file.")
     parser.add_argument(
+        "--gradient-script",
         "--sdxl-script",
+        dest="sdxl_script",
         type=Path,
-        default=Path("examples/sdxl.py"),
-        help="Path to the single-prompt SDXL script.",
+        default=Path("examples/gradient_sdxl.py"),
+        help="Path to the single-prompt gradient SDXL script (default: examples/gradient_sdxl.py).",
     )
-    parser.add_argument("--python", type=str, default=sys.executable, help="Python executable used to launch sdxl.py.")
+    parser.add_argument(
+        "--python",
+        type=str,
+        default=sys.executable,
+        help="Python executable used to launch gradient_sdxl.py.",
+    )
     parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
     parser.add_argument("--negative-prompt", type=str, default="")
     parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_batch"))
@@ -267,7 +276,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _extract_eval_stats(stdout: str) -> Dict[str, str]:
-    """Parse final eval reward stats from sdxl.py stdout."""
+    """Parse final eval reward stats from gradient_sdxl.py stdout."""
     # Looks for: Final eval reward stats (image_reward): mean=-0.330566 max=-0.330566
     result = {"mean": "", "max": ""}
     for line in stdout.splitlines():
@@ -288,7 +297,7 @@ def main() -> int:
         print(_c(f"Prompt file not found: {args.prompts_file}", _Style.RED, _Style.BOLD))
         return 2
     if not args.sdxl_script.exists():
-        print(_c(f"SDXL script not found: {args.sdxl_script}", _Style.RED, _Style.BOLD))
+        print(_c(f"Gradient SDXL script not found: {args.sdxl_script}", _Style.RED, _Style.BOLD))
         return 2
 
     prompts = load_prompts(args.prompts_file)
@@ -313,7 +322,7 @@ def main() -> int:
     log_dir = args.log_dir or (args.output_dir / "_batch_logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    _title("SDXL Batch Runner")
+    _title("Gradient SDXL Batch Runner")
     print(f"Prompt file : {args.prompts_file}")
     print(f"Script      : {args.sdxl_script}")
     print(f"Runs        : {len(selected_prompts)} (from index {args.start_index})")
@@ -339,6 +348,7 @@ def main() -> int:
         print(_c("  output:", _Style.DIM), run_output_dir)
 
         if args.dry_run:
+            success_count += 1
             print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
             rows.append({
                 "index": global_idx,
