@@ -274,6 +274,18 @@ def pipeline_using_gradient_sd(
             raise ValueError("`prompt_embeds` must be provided when `prompt` is None.")
         batch_size = prompt_embeds.shape[0]
 
+    # Diffusers expects prompt/negative_prompt container types to match.
+    if isinstance(prompt, list) and isinstance(negative_prompt, str):
+        negative_prompt = [negative_prompt] * batch_size
+    elif isinstance(prompt, str) and isinstance(negative_prompt, list):
+        if len(negative_prompt) == 1:
+            negative_prompt = negative_prompt[0]
+        else:
+            raise TypeError(
+                "`negative_prompt` must be a string when `prompt` is a string, "
+                f"but got list of length {len(negative_prompt)}."
+            )
+
     base_sample_count = batch_size * num_images_per_prompt
     particle_images_per_prompt = num_images_per_prompt * num_particles
 
