@@ -8,10 +8,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 from PIL import Image
-from diffusers import DDIMScheduler, DiffusionPipeline
+from diffusers import DDIMScheduler, StableDiffusionPipeline
 
-from config.sdxl import get_config
-from seg.diffusers_patch.pipeline_using_Stein_SDXL import pipeline_using_stein_sdxl
+from config.sd import get_config
+from seg.diffusers_patch.pipeline_using_gradient_SD import pipeline_using_gradient_sd
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
@@ -19,14 +19,14 @@ from seg.scorers.clip_scorer import CLIPScorer
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL Stein-guided sampling with per-step reward traces and plots."
+        description="Detailed SD Stein-guided sampling with per-step reward traces and plots."
     )
     parser.add_argument(
         "--config",
         type=str,
         default="pick",
         choices=["pick", "clip", "seg"],
-        help="Config preset name from config/sdxl.py.",
+        help="Config preset name from config/sd.py.",
     )
     parser.add_argument(
         "--prompt",
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="logs/sdxl",
+        default="logs/sd",
         help="Directory for generated images, traces, and plots.",
     )
     parser.add_argument(
@@ -129,7 +129,7 @@ def build_reward_scorer(name, dtype, device):
     raise ValueError(f"Unsupported reward scorer: {name}")
 
 
-def decode_latents_sdxl(pipe, latents):
+def decode_latents_sd(pipe, latents):
     needs_upcasting = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
 
     if needs_upcasting:
@@ -205,7 +205,7 @@ def _score_latents_in_batches(
 
         with torch.inference_mode():
             chunk_latents = chunk_cpu.to(device=device, dtype=inference_dtype)
-            chunk_images = decode_latents_sdxl(pipe, chunk_latents)
+            chunk_images = decode_latents_sd(pipe, chunk_latents)
             chunk_prompts = prompts[offset : offset + chunk_images.shape[0]]
 
             chunk_steer = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
@@ -254,7 +254,7 @@ def _save_intermediate_step_images(
             chunk = step_latents_cpu[offset : min(limit, offset + decode_batch_size)]
             with torch.inference_mode():
                 chunk_latents = chunk.to(device=device, dtype=inference_dtype)
-                chunk_images = decode_latents_sdxl(pipe, chunk_latents)
+                chunk_images = decode_latents_sd(pipe, chunk_latents)
                 chunk_prompts = [prompt] * chunk_images.shape[0]
                 chunk_scores = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
                 for local_idx, image in enumerate(chunk_images):
@@ -331,22 +331,21 @@ def main():
         torch.cuda.manual_seed_all(config.seed)
 
     inference_dtype = torch.float16 if device.type == "cuda" else torch.float32
-    load_kwargs = {"torch_dtype": inference_dtype, "use_safetensors": True}
-    if inference_dtype == torch.float16:
-        load_kwargs["variant"] = "fp16"
-
-    pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
+    load_kwargs = {"torch_dtype": inference_dtype}
+    pipe = StableDiffusionPipeline.from_pretrained(
+        config.pretrained.model,
+        revision=config.pretrained.revision,
+        **load_kwargs,
+    ).to(device)
+    pipe.safety_checker = None
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.enable_vae_slicing()
     pipe.enable_attention_slicing("max")
 
     # Keep VAE in fp32 for decode stability.
-    # Keep text encoders in UNet/inference dtype to avoid cross-attention dtype mismatch.
     pipe.vae.to(torch.float32)
     pipe.text_encoder.to(dtype=inference_dtype)
-    if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
-        pipe.text_encoder_2.to(dtype=inference_dtype)
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     eval_scorer = None
@@ -433,13 +432,13 @@ def main():
 
     inference_start = time.time()
     with torch.no_grad():
-        result = pipeline_using_stein_sdxl(pipe, **call_kwargs)
+        result = pipeline_using_gradient_sd(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
 
     with torch.no_grad():
-        final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
+        final_images = decode_latents_sd(pipe, final_latents.to(device=device, dtype=inference_dtype))
 
     # 1) Save final particle images first.
     for idx, image_tensor in enumerate(final_images):

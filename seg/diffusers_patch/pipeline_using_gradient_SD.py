@@ -1,13 +1,13 @@
-"""Local SDXL pipeline entry point with Stein variational transport guidance."""
+"""Local Stable Diffusion pipeline entry point with Stein variational transport guidance."""
 
 import inspect
 import math
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import torch
-from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
-    StableDiffusionXLPipeline,
-    StableDiffusionXLPipelineOutput,
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+    StableDiffusionPipeline,
+    StableDiffusionPipelineOutput,
     rescale_noise_cfg,
 )
 from diffusers.utils import deprecate
@@ -81,8 +81,8 @@ def _expand_prompts_for_particles(
     return particle_prompts
 
 
-def _decode_latents_for_reward(pipe: StableDiffusionXLPipeline, latents: torch.Tensor) -> torch.Tensor:
-    # Decode a latent tensor to [0, 1] image tensor while preserving gradient flow.
+def _decode_latents_for_reward(pipe: StableDiffusionPipeline, latents: torch.Tensor) -> torch.Tensor:
+    # Decode latent tensor to [0, 1] image tensor while preserving grad flow.
     needs_upcasting = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
 
     if needs_upcasting:
@@ -105,8 +105,7 @@ def _decode_latents_for_reward(pipe: StableDiffusionXLPipeline, latents: torch.T
     if needs_upcasting:
         pipe.vae.to(dtype=torch.float16)
 
-    image = (image / 2 + 0.5).clamp(0, 1)
-    return image
+    return (image / 2 + 0.5).clamp(0, 1)
 
 
 def _rbf_stein_vector_field(
@@ -116,7 +115,7 @@ def _rbf_stein_vector_field(
     num_particles: int,
     eps: float = 1e-8,
 ) -> torch.Tensor:
-    # Compute Stein direction per prompt group so particles from different prompts do not interact.
+    # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
     if num_particles == 1:
         return score
 
@@ -157,45 +156,35 @@ def _to_timestep_int(t: Union[int, torch.Tensor]) -> int:
     return int(t.item()) if torch.is_tensor(t) else int(t)
 
 
-def pipeline_using_stein_sdxl(
-    self: StableDiffusionXLPipeline,
+@torch.no_grad()
+def pipeline_using_gradient_sd(
+    self: StableDiffusionPipeline,
     prompt: Optional[Union[str, List[str]]] = None,
-    prompt_2: Optional[Union[str, List[str]]] = None,
     height: Optional[int] = None,
     width: Optional[int] = None,
     num_inference_steps: int = 50,
     timesteps: Optional[List[int]] = None,
     sigmas: Optional[List[float]] = None,
-    denoising_end: Optional[float] = None,
-    guidance_scale: float = 5.0,
+    guidance_scale: float = 7.5,
     negative_prompt: Optional[Union[str, List[str]]] = None,
-    negative_prompt_2: Optional[Union[str, List[str]]] = None,
     num_images_per_prompt: int = 1,
     eta: float = 0.0,
     generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     latents: Optional[torch.Tensor] = None,
     prompt_embeds: Optional[torch.Tensor] = None,
     negative_prompt_embeds: Optional[torch.Tensor] = None,
-    pooled_prompt_embeds: Optional[torch.Tensor] = None,
-    negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
     ip_adapter_image: Optional[Any] = None,
     ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
     output_type: str = "pil",
     return_dict: bool = True,
     cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     guidance_rescale: float = 0.0,
-    original_size: Optional[Tuple[int, int]] = None,
-    crops_coords_top_left: Tuple[int, int] = (0, 0),
-    target_size: Optional[Tuple[int, int]] = None,
-    negative_original_size: Optional[Tuple[int, int]] = None,
-    negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
-    negative_target_size: Optional[Tuple[int, int]] = None,
     clip_skip: Optional[int] = None,
     callback_on_step_end: Optional[Callable[..., Optional[Dict[str, torch.Tensor]]]] = None,
     callback_on_step_end_tensor_inputs: List[str] = ["latents"],
     # Stein parameters
     num_particles: int = 4,
-    batch_p: int = 1, # number of particles to run parallely
+    batch_p: int = 1,
     reward_fn: Optional[Callable[[torch.Tensor, List[str]], torch.Tensor]] = None,
     stein_step: float = 0.05,
     stein_loop: int = 1,
@@ -208,8 +197,8 @@ def pipeline_using_stein_sdxl(
     return_all_particles: bool = True,
     intermediate_rewards: bool = False,
     **kwargs,
-) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
-    """Run SDXL denoising with optional Stein particle transport guidance."""
+) -> Union[StableDiffusionPipelineOutput, Tuple]:
+    """Run SD denoising with optional Stein particle transport guidance."""
 
     callback = kwargs.pop("callback", None)
     callback_steps = kwargs.pop("callback_steps", None)
@@ -239,10 +228,8 @@ def pipeline_using_stein_sdxl(
     if callback_on_step_end is not None and hasattr(callback_on_step_end, "tensor_inputs"):
         callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
 
-    height = height or self.default_sample_size * self.vae_scale_factor
-    width = width or self.default_sample_size * self.vae_scale_factor
-    original_size = original_size or (height, width)
-    target_size = target_size or (height, width)
+    height = height or self.unet.config.sample_size * self.vae_scale_factor
+    width = width or self.unet.config.sample_size * self.vae_scale_factor
 
     # 1. Check inputs
     if num_particles < 1:
@@ -256,29 +243,26 @@ def pipeline_using_stein_sdxl(
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
 
-    self.check_inputs(
-        prompt,
-        prompt_2,
-        height,
-        width,
-        callback_steps,
-        negative_prompt,
-        negative_prompt_2,
-        prompt_embeds,
-        negative_prompt_embeds,
-        pooled_prompt_embeds,
-        negative_pooled_prompt_embeds,
-        ip_adapter_image,
-        ip_adapter_image_embeds,
-        callback_on_step_end_tensor_inputs,
-    )
+    check_params = inspect.signature(self.check_inputs).parameters
+    check_kwargs: Dict[str, Any] = {
+        "prompt": prompt,
+        "height": height,
+        "width": width,
+        "callback_steps": callback_steps,
+        "negative_prompt": negative_prompt,
+        "prompt_embeds": prompt_embeds,
+        "negative_prompt_embeds": negative_prompt_embeds,
+        "ip_adapter_image": ip_adapter_image,
+        "ip_adapter_image_embeds": ip_adapter_image_embeds,
+        "callback_on_step_end_tensor_inputs": callback_on_step_end_tensor_inputs,
+    }
+    self.check_inputs(**{k: v for k, v in check_kwargs.items() if k in check_params})
 
     # 2. Define call parameters
     self._guidance_scale = guidance_scale
     self._guidance_rescale = guidance_rescale
     self._clip_skip = clip_skip
     self._cross_attention_kwargs = cross_attention_kwargs
-    self._denoising_end = denoising_end
     self._interrupt = False
 
     if prompt is not None and isinstance(prompt, str):
@@ -297,36 +281,51 @@ def pipeline_using_stein_sdxl(
     lora_scale = self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
 
     # 3. Encode input prompt
-    (
-        prompt_embeds,
-        negative_prompt_embeds,
-        pooled_prompt_embeds,
-        negative_pooled_prompt_embeds,
-    ) = self.encode_prompt(
-        prompt=prompt,
-        prompt_2=prompt_2,
-        device=device,
-        num_images_per_prompt=particle_images_per_prompt,
-        do_classifier_free_guidance=self.do_classifier_free_guidance,
-        negative_prompt=negative_prompt,
-        negative_prompt_2=negative_prompt_2,
-        prompt_embeds=prompt_embeds,
-        negative_prompt_embeds=negative_prompt_embeds,
-        pooled_prompt_embeds=pooled_prompt_embeds,
-        negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
-        lora_scale=lora_scale,
-        clip_skip=self.clip_skip,
-    )
+    if hasattr(self, "encode_prompt"):
+        encode_params = inspect.signature(self.encode_prompt).parameters
+        encode_kwargs: Dict[str, Any] = {
+            "prompt": prompt,
+            "device": device,
+            "num_images_per_prompt": particle_images_per_prompt,
+            "do_classifier_free_guidance": self.do_classifier_free_guidance,
+            "negative_prompt": negative_prompt,
+            "prompt_embeds": prompt_embeds,
+            "negative_prompt_embeds": negative_prompt_embeds,
+            "lora_scale": lora_scale,
+            "clip_skip": self.clip_skip,
+        }
+        encoded = self.encode_prompt(**{k: v for k, v in encode_kwargs.items() if k in encode_params})
+
+        if isinstance(encoded, tuple) and len(encoded) >= 2:
+            prompt_embeds, negative_prompt_embeds = encoded[0], encoded[1]
+        elif torch.is_tensor(encoded):
+            prompt_embeds = encoded
+            negative_prompt_embeds = None
+        else:
+            raise RuntimeError("Unexpected encode_prompt output format.")
+    else:
+        prompt_embeds = self._encode_prompt(
+            prompt,
+            device,
+            particle_images_per_prompt,
+            self.do_classifier_free_guidance,
+            negative_prompt,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            lora_scale=lora_scale,
+        )
+        negative_prompt_embeds = None
 
     assert prompt_embeds is not None
-    assert pooled_prompt_embeds is not None
     prompt_embeds = cast(torch.Tensor, prompt_embeds)
-    pooled_prompt_embeds = cast(torch.Tensor, pooled_prompt_embeds)
+
     if self.do_classifier_free_guidance:
-        assert negative_prompt_embeds is not None
-        assert negative_pooled_prompt_embeds is not None
+        if negative_prompt_embeds is None:
+            raise ValueError("negative_prompt_embeds is required for classifier-free guidance.")
         negative_prompt_embeds = cast(torch.Tensor, negative_prompt_embeds)
-        negative_pooled_prompt_embeds = cast(torch.Tensor, negative_pooled_prompt_embeds)
+        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+
+    prompt_embeds = prompt_embeds.to(device)
 
     # 4. Prepare timesteps
     timesteps, num_inference_steps = retrieve_timesteps(
@@ -371,40 +370,7 @@ def pipeline_using_stein_sdxl(
     # 6. Prepare extra step kwargs
     extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
-    # 7. Prepare added time ids & embeddings
-    add_text_embeds = pooled_prompt_embeds
-    if self.text_encoder_2 is None:
-        text_encoder_projection_dim = int(pooled_prompt_embeds.shape[-1])
-    else:
-        text_encoder_projection_dim = self.text_encoder_2.config.projection_dim
-
-    add_time_ids = self._get_add_time_ids(
-        original_size,
-        crops_coords_top_left,
-        target_size,
-        dtype=prompt_embeds.dtype,
-        text_encoder_projection_dim=text_encoder_projection_dim,
-    )
-    if negative_original_size is not None and negative_target_size is not None:
-        negative_add_time_ids = self._get_add_time_ids(
-            negative_original_size,
-            negative_crops_coords_top_left,
-            negative_target_size,
-            dtype=prompt_embeds.dtype,
-            text_encoder_projection_dim=text_encoder_projection_dim,
-        )
-    else:
-        negative_add_time_ids = add_time_ids
-
-    if self.do_classifier_free_guidance:
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-        add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-        add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
-
-    prompt_embeds = prompt_embeds.to(device)
-    add_text_embeds = add_text_embeds.to(device)
-    add_time_ids = add_time_ids.to(device).repeat(expected_particle_batch, 1)
-
+    image_embeds = None
     if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
         image_embeds = self.prepare_ip_adapter_image_embeds(
             ip_adapter_image,
@@ -415,18 +381,6 @@ def pipeline_using_stein_sdxl(
         )
 
     num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-
-    if (
-        self.denoising_end is not None
-        and isinstance(self.denoising_end, float)
-        and self.denoising_end > 0
-        and self.denoising_end < 1
-    ):
-        discrete_timestep_cutoff = int(
-            round(self.scheduler.config.num_train_timesteps - (self.denoising_end * self.scheduler.config.num_train_timesteps))
-        )
-        num_inference_steps = len(list(filter(lambda ts: ts >= discrete_timestep_cutoff, timesteps)))
-        timesteps = timesteps[:num_inference_steps]
 
     timestep_cond = None
     if self.unet.config.time_cond_proj_dim is not None:
@@ -450,7 +404,6 @@ def pipeline_using_stein_sdxl(
     else:
         steer_end_effective = int(steer_end)
 
-    # Support Python-style negative indexing for user convenience.
     if steer_start_effective < 0:
         steer_start_effective += total_inference_steps
     if steer_end_effective < 0:
@@ -519,15 +472,15 @@ def pipeline_using_stein_sdxl(
         latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
         prompt_embeds_local = _slice_condition_tensor(prompt_embeds, start_idx, end_idx)
-        add_text_embeds_local = _slice_condition_tensor(add_text_embeds, start_idx, end_idx)
-        add_time_ids_local = _slice_condition_tensor(add_time_ids, start_idx, end_idx)
 
-        added_cond_kwargs = {"text_embeds": add_text_embeds_local, "time_ids": add_time_ids_local}
-        if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            added_cond_kwargs["image_embeds"] = [
-                _slice_condition_tensor(embed, start_idx, end_idx)
-                for embed in image_embeds
-            ]
+        added_cond_kwargs = None
+        if image_embeds is not None:
+            added_cond_kwargs = {
+                "image_embeds": [
+                    _slice_condition_tensor(embed, start_idx, end_idx)
+                    for embed in image_embeds
+                ]
+            }
 
         noise_pred_local = self.unet(
             latent_model_input,
@@ -559,10 +512,7 @@ def pipeline_using_stein_sdxl(
         pred_x0 = (current_latents - sqrt_one_minus_alpha_bar_t * noise_pred_local) / sqrt_alpha_bar_t
         return pred_x0, sqrt_alpha_bar_t, sqrt_one_minus_alpha_bar_t
 
-    def _compute_reward(
-        current_latents: torch.Tensor,
-        t: torch.Tensor,
-    ) -> torch.Tensor:
+    def _compute_reward(current_latents: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if reward_fn is None or prompt_particles is None:
             return torch.zeros(current_latents.shape[0], device=current_latents.device, dtype=current_latents.dtype)
 
@@ -738,15 +688,13 @@ def pipeline_using_stein_sdxl(
                 variance_t = torch.tensor(0.0, device=latents.device, dtype=latents.dtype)
 
             sigma_t = eta * torch.sqrt(torch.clamp(variance_t, min=0.0))
-            pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t**2, min=0.0))
+            pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t ** 2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
             pred_x0, _, _ = _predict_x0(latents, t_int, noise_pred)
             if is_steered_step:
                 post_stein_pred_x0 = pred_x0.detach().clone()
 
             latents_dtype = latents.dtype
-            
-            # DDIM proposal from predicted clean sample and guided noise.
             latents = (
                 torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0
                 + pred_noise_coeff * noise_pred
@@ -764,8 +712,6 @@ def pipeline_using_stein_sdxl(
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
                     negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-                    add_text_embeds = callback_outputs.pop("add_text_embeds", add_text_embeds)
-                    add_time_ids = callback_outputs.pop("add_time_ids", add_time_ids)
 
             if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                 progress_bar.update()
@@ -821,9 +767,6 @@ def pipeline_using_stein_sdxl(
     else:
         image = latents
 
-    if output_type != "latent" and self.watermark is not None:
-        image = self.watermark.apply_watermark(image)
-
     image = self.image_processor.postprocess(image, output_type=output_type)
     self.maybe_free_model_hooks()
 
@@ -835,4 +778,8 @@ def pipeline_using_stein_sdxl(
     if intermediate_rewards:
         return {"images": image, "intermediate_rewards": intermediate_rewards_data}
 
-    return StableDiffusionXLPipelineOutput(images=image)
+    return StableDiffusionPipelineOutput(images=image)
+
+
+# Backward-compatible alias used in older callsites/docs.
+pipeline_using_stein_sd = pipeline_using_gradient_sd

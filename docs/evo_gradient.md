@@ -82,7 +82,7 @@ Expose in config (via `config/general.py` and preset overrides):
 - `sample.steer_start`
 - `sample.steer_end`
 
-Pass through in caller (`DiffusionSampler.py`) when invoking pipeline.
+Pass through in runner callsites (`runs/single/gradient_sdxl.py`, `runs/single/gradient_sd.py`) when invoking pipeline.
 
 ## 4. Mathematical Formulation to Implement
 
@@ -220,15 +220,15 @@ for t in timesteps:
 
 ## 8. Code Change Plan by File
 
-1. `seg/diffusers_patch/pipeline_using_Stein_SDXL.py`
+1. `seg/diffusers_patch/pipeline_using_gradient_SDXL.py` and `seg/diffusers_patch/pipeline_using_gradient_SD.py`
 	- Implement full particle-aware Stein loop in denoising steps.
 	- Remove any remaining SMC bookkeeping assumptions.
 	- Add steering range argument handling (`steer_start`, `steer_end`).
 	- Implement manifold-preserving proposal update.
 	- Return optional traces (rewards, step norms, particle latents) for debugging.
 
-2. `DiffusionSampler.py`
-	- Pass new sampling arguments from config to pipeline call.
+2. `runs/single/gradient_sdxl.py` and `runs/single/gradient_sd.py`
+	- Pass sampling arguments from config to pipeline call.
 	- Keep existing reward scorer wiring.
 
 3. `config/general.py` and `config/sdxl.py`
@@ -274,4 +274,3 @@ Then tune in this order:
 2. `stein_loop`
 3. steering interval `(start, end)`
 4. reward scaling (`kl_coeff`/`beta_t` schedule)
-

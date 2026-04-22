@@ -1,6 +1,6 @@
 # Self-Improving Guidance
 
-Stein-guided SDXL sampling for reward optimization.
+Stein-guided SDXL and SD sampling for reward optimization.
 
 ## Setup
 
@@ -11,23 +11,23 @@ pip install --no-deps image-reward
 
 ## Quick Start
 
-Run one prompt:
+Run one SDXL prompt:
 
 ```bash
-python examples/gradient_sdxl.py \
+python runs/single/gradient_sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
   --eval-reward image_reward \
-  --num-steps 80 \
+  --num-steps 100 \
   --num-particles 4 \
   --stein-loop 1 \
-  --stein-step 0.02 \
-  --steer-start 20 \
-  --steer-end 60 \
+  --stein-step 0.005 \
+  --steer-start 0 \
+  --steer-end 20 \
   --output-dir logs/sdxl
 ```
 
-Run Multiple Prompts
+Run SDXL batch prompts:
 
 ```bash
 python runs/gradient_sdxl_batch.py \
@@ -35,15 +35,50 @@ python runs/gradient_sdxl_batch.py \
   --config pick \
   --eval-reward image_reward \
   --device cuda \
-  --num-steps 80 \
+  --num-steps 100 \
   --num-particles 4 \
   --batch-p 1 \
   --stein-loop 1 \
   --stein-step 0.005 \
-  --steer-start 20 \
-  --steer-end 60 \
+  --steer-start 0 \
+  --steer-end 20 \
   --save-intermediate-rewards --trace-eval-batch 1 \
   --output-dir logs/sdxl_batch
+```
+
+Run one SD 1.5 prompt:
+
+```bash
+python runs/single/gradient_sd.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --eval-reward image_reward \
+  --num-steps 100 \
+  --num-particles 4 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --steer-start 0 \
+  --steer-end 20 \
+  --output-dir logs/sd
+```
+
+Run SD 1.5 batch prompts:
+
+```bash
+python runs/gradient_sd_batch.py \
+  --prompts-file prompts/hps_v2_all_eval.txt \
+  --config pick \
+  --eval-reward image_reward \
+  --device cuda \
+  --num-steps 100 \
+  --num-particles 4 \
+  --batch-p 1 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --steer-start 0 \
+  --steer-end 20 \
+  --save-intermediate-rewards --trace-eval-batch 1 \
+  --output-dir logs/sd_batch
 ```
 
 Useful flags:
@@ -59,6 +94,10 @@ Batch outputs:
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
 
+SD default checkpoint:
+
+- `runwayml/stable-diffusion-v1-5` (from `config/sd.py`)
+
 ### Main Options
 
 - `--config`: reward preset (`pick`, `clip`, `seg`)
@@ -71,7 +110,11 @@ Batch outputs:
 
 ### Outputs
 
-Saved in `logs/sdxl/<config>_seed<seed>`:
+SDXL saved in `logs/sdxl/<config>_seed<seed>`.
+
+SD saved in `logs/sd/<config>_seed<seed>`.
+
+Each run directory contains:
 
 - Final particle images (`sample_*.png`)
 - Final reward summary (`final_rewards.json`)

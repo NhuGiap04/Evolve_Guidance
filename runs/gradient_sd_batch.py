@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for runs/single/gradient_sdxl.py using prompts from .txt or .json."""
+"""Batch runner for runs/single/gradient_sd.py using prompts from .txt or .json."""
 
 import argparse
 import json
@@ -123,10 +123,10 @@ def _append_optional_arg(cmd: List[str], flag: str, value: Optional[Any]) -> Non
     cmd.extend([flag, str(value)])
 
 
-def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> List[str]:
+def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> List[str]:
     cmd = [
         args.python,
-        str(args.sdxl_script),
+        str(args.sd_script),
         "--config",
         args.config,
         "--prompt",
@@ -211,26 +211,26 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run gradient_sdxl.py over prompts from a .txt or .json file.",
+        description="Run gradient_sd.py over prompts from a .txt or .json file.",
     )
     parser.add_argument("--prompts-file", type=Path, required=True, help="Path to .txt or .json prompts file.")
     parser.add_argument(
         "--gradient-script",
-        "--sdxl-script",
-        dest="sdxl_script",
+        "--sd-script",
+        dest="sd_script",
         type=Path,
-        default=Path("runs/single/gradient_sdxl.py"),
-        help="Path to the single-prompt gradient SDXL script.",
+        default=Path("runs/single/gradient_sd.py"),
+        help="Path to the single-prompt gradient SD script.",
     )
     parser.add_argument(
         "--python",
         type=str,
         default=sys.executable,
-        help="Python executable used to launch gradient_sdxl.py.",
+        help="Python executable used to launch gradient_sd.py.",
     )
     parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
     parser.add_argument("--negative-prompt", type=str, default="")
-    parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_batch"))
+    parser.add_argument("--output-dir", type=Path, default=Path("logs/sd_batch"))
     parser.add_argument(
         "--eval-reward",
         type=str,
@@ -276,7 +276,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _extract_eval_stats(stdout: str) -> Dict[str, str]:
-    """Parse final eval reward stats from gradient_sdxl.py stdout."""
+    """Parse final eval reward stats from gradient_sd.py stdout."""
     # Looks for: Final eval reward stats (image_reward): mean=-0.330566 max=-0.330566
     result = {"mean": "", "max": ""}
     for line in stdout.splitlines():
@@ -296,8 +296,8 @@ def main() -> int:
     if not args.prompts_file.exists():
         print(_c(f"Prompt file not found: {args.prompts_file}", _Style.RED, _Style.BOLD))
         return 2
-    if not args.sdxl_script.exists():
-        print(_c(f"Gradient SDXL script not found: {args.sdxl_script}", _Style.RED, _Style.BOLD))
+    if not args.sd_script.exists():
+        print(_c(f"Gradient SD script not found: {args.sd_script}", _Style.RED, _Style.BOLD))
         return 2
 
     prompts = load_prompts(args.prompts_file)
@@ -322,9 +322,9 @@ def main() -> int:
     log_dir = args.log_dir or (args.output_dir / "_batch_logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    _title("Gradient SDXL Batch Runner")
+    _title("Gradient SD Batch Runner")
     print(f"Prompt file : {args.prompts_file}")
-    print(f"Script      : {args.sdxl_script}")
+    print(f"Script      : {args.sd_script}")
     print(f"Runs        : {len(selected_prompts)} (from index {args.start_index})")
     print(f"Output root : {args.output_dir}")
     print(f"Log dir     : {log_dir}")
@@ -342,7 +342,7 @@ def main() -> int:
         run_name = f"run_{global_idx:04d}_{prompt_slug}"
         run_output_dir = args.output_dir / run_name
 
-        cmd = _build_sdxl_cmd(args, prompt, run_output_dir)
+        cmd = _build_sd_cmd(args, prompt, run_output_dir)
 
         print(_c(f"[{local_idx:03d}/{total_runs:03d}]", _Style.BOLD), _truncate(prompt, 100))
         print(_c("  output:", _Style.DIM), run_output_dir)
