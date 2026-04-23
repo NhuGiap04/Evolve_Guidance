@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -311,16 +312,19 @@ def main() -> int:
 
     selected_prompts = prompts[args.start_index:end_index]
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = args.log_dir or (args.output_dir / "_batch_logs")
+    run_stamp = datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    session_output_dir = args.output_dir / run_stamp
+    session_output_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = args.log_dir or (session_output_dir / "_batch_logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
     _title("SDXL Batch Runner")
     print(f"Prompt file : {args.prompts_file}")
     print(f"Script      : {args.sdxl_script}")
     print(f"Runs        : {len(selected_prompts)} (from index {args.start_index})")
-    print(f"Output root : {args.output_dir}")
+    print(f"Output root : {session_output_dir}")
     print(f"Log dir     : {log_dir}")
+    print(f"Run stamp   : {run_stamp}")
     print()
 
     rows: List[Dict[str, Any]] = []
@@ -333,7 +337,7 @@ def main() -> int:
         global_idx = args.start_index + local_idx - 1
         prompt_slug = _slugify(prompt)
         run_name = f"run_{global_idx:04d}_{prompt_slug}"
-        run_output_dir = args.output_dir / run_name
+        run_output_dir = session_output_dir / run_name
 
         cmd = _build_sdxl_cmd(args, prompt, run_output_dir)
 
@@ -416,7 +420,7 @@ def main() -> int:
     _print_summary(rows)
 
     # Save eval summary CSV
-    csv_path = args.output_dir / "batch_eval_summary.csv"
+    csv_path = session_output_dir / "batch_eval_summary.csv"
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["index", "prompt", "mean", "max", "status"])
         writer.writeheader()

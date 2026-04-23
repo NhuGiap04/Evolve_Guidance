@@ -1,6 +1,7 @@
 import argparse
 import csv
 import gc
+from datetime import datetime
 from pathlib import Path
 
 import lpips
@@ -112,6 +113,13 @@ def parse_args():
         default="cuda",
         help="Device to run on, e.g. cuda or cpu.",
     )
+    parser.add_argument(
+        "--cpu-offload",
+        type=str,
+        default="none",
+        choices=["none", "model", "sequential"],
+        help="Optional Diffusers CPU offload mode for the generation pipeline.",
+    )
 
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
     parser.add_argument("--num-steps", type=int, default=None, help="Optional num inference steps override.")
@@ -206,6 +214,16 @@ def release_generation_modules(pipe):
         torch.cuda.empty_cache()
 
 
+def release_reward_scorer(scorer):
+    if scorer is None:
+        return
+    if hasattr(scorer, "to"):
+        scorer.to("cpu")
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def main():
     args = parse_args()
     if args.trace_decode_batch_size < 1:
@@ -256,18 +274,29 @@ def main():
         config.pretrained.model,
         revision=config.pretrained.revision,
         torch_dtype=inference_dtype,
-    ).to(device)
+    )
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.safety_checker = None
+    pipe.enable_vae_slicing()
+    pipe.enable_vae_tiling()
+    pipe.enable_attention_slicing("max")
+
+    if args.cpu_offload != "none":
+        if device.type != "cuda":
+            raise ValueError("--cpu-offload requires --device cuda.")
+        if args.cpu_offload == "model":
+            pipe.enable_model_cpu_offload(device=device)
+        else:
+            pipe.enable_sequential_cpu_offload(device=device)
+    else:
+        pipe = pipe.to(device)
 
     steer_reward_name = config.reward_fn
     steer_scorer = build_reward_scorer(steer_reward_name, dtype=inference_dtype, device=device)
-    eval_scorer = None
-    if args.eval_reward not in {"none", "lpips"}:
-        eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
 
-    out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
+    run_stamp = datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    out_dir = Path(args.output_dir) / run_stamp / f"{args.config}_seed{config.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
     intermediate_out_dir = out_dir / "intermediate_images"
     if args.save_intermediate_images:
@@ -415,6 +444,16 @@ def main():
     if device.type == "cuda":
         release_generation_modules(pipe)
 
+    if args.eval_reward not in {"none", "lpips"} and args.eval_reward != steer_reward_name:
+        release_reward_scorer(steer_scorer)
+
+    eval_scorer = None
+    if args.eval_reward not in {"none", "lpips"}:
+        if args.eval_reward == steer_reward_name:
+            eval_scorer = steer_scorer
+        else:
+            eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
+
     for idx, image_tensor in enumerate(final_images):
         score = float(final_steer_scores[idx])
         file_name = f"sample_{idx:02d}_steer_{score:.6f}.png"
@@ -461,11 +500,16 @@ def main():
             f"Final eval reward stats ({args.eval_reward}): "
             f"mean={final_eval_scores.mean().item():.6f} max={final_eval_scores.max().item():.6f}"
         )
+        if eval_scorer is not steer_scorer:
+            release_reward_scorer(eval_scorer)
 
     print("Saved outputs to:", out_dir)
+    print(f"Run timestamp: {run_stamp}")
     print(f"Steering reward used: {steer_reward_name}")
     if args.eval_reward != "none":
         print(f"Evaluation reward used: {args.eval_reward}")
+    if args.cpu_offload != "none":
+        print(f"CPU offload used: {args.cpu_offload}")
     print(
         "Final steering reward stats: "
         f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"

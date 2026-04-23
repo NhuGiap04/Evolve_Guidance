@@ -43,6 +43,7 @@ EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 COMMON_ARGS="${COMMON_ARGS:-}"
 STREAM_LOGS="${STREAM_LOGS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
+RUN_STAMP="${RUN_STAMP:-$(date +%Y.%m.%d_%H.%M.%S)}"
 
 if [ -z "$PROMPTS_FILE" ]; then
   echo "Usage: bash examples/run_parallel_inference.sh <prompts_file> [config] [gpu_ids_csv] [output_root]" >&2
@@ -66,7 +67,8 @@ if [ "${#GPUS[@]}" -eq 0 ]; then
   exit 2
 fi
 
-mkdir -p "$OUTPUT_ROOT" "$OUTPUT_ROOT/_logs"
+SESSION_OUTPUT_ROOT="$OUTPUT_ROOT/$RUN_STAMP"
+mkdir -p "$SESSION_OUTPUT_ROOT" "$SESSION_OUTPUT_ROOT/_logs"
 
 declare -a PIDS=()
 declare -a PID_GPU=()
@@ -125,8 +127,8 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
 
   gpu="${GPUS[$((run_idx % ${#GPUS[@]}))]}"
   run_name=$(printf "run_%04d" "$run_idx")
-  run_dir="$OUTPUT_ROOT/$run_name"
-  log_file="$OUTPUT_ROOT/_logs/${run_name}.log"
+  run_dir="$SESSION_OUTPUT_ROOT/$run_name"
+  log_file="$SESSION_OUTPUT_ROOT/_logs/${run_name}.log"
 
   slot_wait "${#GPUS[@]}"
 
@@ -151,6 +153,7 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
 
   echo "[$run_name] gpu=$gpu"
   echo "[$run_name] prompt=$prompt"
+  echo "[$run_name] run_stamp=$RUN_STAMP"
   echo "[$run_name] cmd: CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$REPO_ROOT ${cmd[*]}"
 
   if [ "$DRY_RUN" = "1" ]; then
@@ -194,7 +197,8 @@ for i in "${!PIDS[@]}"; do
 done
 
 echo "Finished. Total runs: $run_idx, failures: $failures"
-echo "Logs: $OUTPUT_ROOT/_logs"
+echo "Run stamp: $RUN_STAMP"
+echo "Logs: $SESSION_OUTPUT_ROOT/_logs"
 
 if [ "$failures" -gt 0 ]; then
   exit 1
