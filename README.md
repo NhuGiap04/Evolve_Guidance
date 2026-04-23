@@ -6,9 +6,10 @@ Stein-guided SDXL sampling for reward optimization.
 
 ```bash
 pip install -e .
-pip install --no-deps image-reward
 pip install "numpy<2" lpips
 ```
+
+`image-reward` installs the Python module as `ImageReward`, which is the import name used by this repo.
 
 ## Quick Start
 
