@@ -145,7 +145,7 @@ For each timestep `t` in scheduler order (descending):
 	- Propose $x_{t-1}$ via manifold-preserving transition:
 
 $$
-x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_{(0|t)} + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t^{\mathrm{pre}},t) + \sigma_t z.
+x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_{0|t} + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t^{\mathrm{pre}},t) + \sigma_t z.
 $$
 
 4. Continue to next timestep.
