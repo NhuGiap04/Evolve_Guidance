@@ -110,6 +110,19 @@ Batch outputs:
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
 
+## Evaluate A Saved DAS Run
+
+To evaluate a saved run directory the same way as `das_eval.ipynb`, use:
+
+```bash
+python das_eval.py logs/SMC/aesthetic/2024.09.26_01.12.19
+```
+
+This reads images from `<run-dir>/eval_vis` and writes:
+
+- `eval_results.csv`
+- `eval_diversity_results.csv`
+
 ## Multi-GPU Inference With Accelerate
 
 For DAS-style multi-GPU inference, launch one process per GPU with `accelerate`. Each process now receives a distinct prompt slice and rank 0 gathers the results for logging and image saving.
