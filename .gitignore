@@ -214,4 +214,4 @@ __marimo__/
 
 dev/
 references/
-logs/
+logs/*
