@@ -12,7 +12,7 @@ pip install "numpy<2" lpips
 
 ## Quick Start
 
-Run one prompt:
+Run one SDXL prompt:
 
 ```bash
 python examples/sdxl.py \
@@ -26,6 +26,18 @@ python examples/sdxl.py \
   --steer-start 20 \
   --steer-end 60 \
   --output-dir logs/sdxl
+```
+
+Run one SD (v1.5) prompt:
+
+```bash
+python examples/sd.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --eval-reward image_reward \
+  --num-steps 50 \
+  --guidance-scale 7.5 \
+  --output-dir logs/sd
 ```
 
 ## Save Intermediate Images
@@ -110,6 +122,19 @@ Batch outputs:
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
 
+Run SD batch prompts:
+
+```bash
+python examples/run_sd_batch.py \
+  --prompts-file prompts/hps_v2_all_eval.txt \
+  --config pick \
+  --eval-reward image_reward \
+  --device cuda \
+  --num-steps 50 \
+  --guidance-scale 7.5 \
+  --output-dir logs/sd_batch
+```
+
 ## Evaluate A Saved DAS Run
 
 To evaluate a saved run directory the same way as `das_eval.ipynb`, use:
@@ -129,6 +154,18 @@ For DAS-style multi-GPU inference, launch one process per GPU with `accelerate`.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --num_processes 4 DAS.py --config config/sdxl.py:pick
+```
+
+SD variant:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --num_processes 4 DAS.py --config config/sd.py:pick
+```
+
+Or use the helper launcher:
+
+```bash
+python examples/run_parallel_inference.py --config config/sd.py:pick --num-processes 4 --gpu-ids 0,1,2,3
 ```
 
 Notes:
