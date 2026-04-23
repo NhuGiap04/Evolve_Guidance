@@ -87,6 +87,13 @@ def parse_args():
         help="Optional second reward model for tracing decoded steps.",
     )
     parser.add_argument(
+        "--steer-reward",
+        type=str,
+        default=None,
+        choices=["clip", "pick", "image_reward"],
+        help="Optional reward model override used as the steering/target reward during inference.",
+    )
+    parser.add_argument(
         "--lpips-ref-dir",
         type=str,
         default=None,
@@ -264,6 +271,8 @@ def main():
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
         config.sample.steer_end = args.steer_end
+    if args.steer_reward is not None:
+        config.reward_fn = args.steer_reward
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -291,7 +300,8 @@ def main():
     if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
         pipe.text_encoder_2.to(dtype=inference_dtype)
 
-    steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
+    steer_reward_name = config.reward_fn
+    steer_scorer = build_reward_scorer(steer_reward_name, dtype=inference_dtype, device=device)
     eval_scorer = None
     if args.eval_reward not in {"none", "lpips"}:
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
@@ -400,7 +410,7 @@ def main():
             plot_x,
             pre_mean[:trace_len],
             post_mean[:trace_len],
-            title=f"Before/After steering reward ({config.reward_fn}) - mean",
+            title=f"Before/After steering reward ({steer_reward_name}) - mean",
             ylabel="Reward",
             out_path=out_dir / "steer_before_after_mean.png",
         )
@@ -408,7 +418,7 @@ def main():
             plot_x,
             pre_max[:trace_len],
             post_max[:trace_len],
-            title=f"Before/After steering reward ({config.reward_fn}) - max",
+            title=f"Before/After steering reward ({steer_reward_name}) - max",
             ylabel="Reward",
             out_path=out_dir / "steer_before_after_max.png",
         )
@@ -491,6 +501,9 @@ def main():
         )
 
     print("Saved outputs to:", out_dir)
+    print(f"Steering reward used: {steer_reward_name}")
+    if args.eval_reward != "none":
+        print(f"Evaluation reward used: {args.eval_reward}")
     print(
         "Final steering reward stats: "
         f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"

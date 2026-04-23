@@ -140,6 +140,7 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
         args.device,
     ]
 
+    _append_optional_arg(cmd, "--steer-reward", args.steer_reward)
     _append_optional_arg(cmd, "--seed", args.seed)
     _append_optional_arg(cmd, "--num-steps", args.num_steps)
     _append_optional_arg(cmd, "--batch-size", args.batch_size)
@@ -210,6 +211,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="image_reward",
         choices=["none", "clip", "pick", "image_reward", "lpips"],
+    )
+    parser.add_argument(
+        "--steer-reward",
+        type=str,
+        default=None,
+        choices=["clip", "pick", "image_reward"],
     )
     parser.add_argument("--lpips-ref-dir", type=str, default=None)
     parser.add_argument("--lpips-net", type=str, default="alex", choices=["alex", "vgg", "squeeze"])

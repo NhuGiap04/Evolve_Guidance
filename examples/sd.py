@@ -84,6 +84,13 @@ def parse_args():
         help="Optional second reward model for final image evaluation.",
     )
     parser.add_argument(
+        "--steer-reward",
+        type=str,
+        default=None,
+        choices=["clip", "pick", "image_reward"],
+        help="Optional reward model override used as the steering/target reward during inference.",
+    )
+    parser.add_argument(
         "--lpips-ref-dir",
         type=str,
         default=None,
@@ -143,6 +150,8 @@ def main():
         config.sample.guidance_scale = args.guidance_scale
     if args.eta is not None:
         config.sample.eta = args.eta
+    if args.steer_reward is not None:
+        config.reward_fn = args.steer_reward
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -162,7 +171,8 @@ def main():
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.safety_checker = None
 
-    steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
+    steer_reward_name = config.reward_fn
+    steer_scorer = build_reward_scorer(steer_reward_name, dtype=inference_dtype, device=device)
     eval_scorer = None
     if args.eval_reward not in {"none", "lpips"}:
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
@@ -195,7 +205,7 @@ def main():
 
     for idx, image_tensor in enumerate(final_images):
         score = float(final_steer_scores[idx])
-        file_name = f"sample_{idx:02d}_score_{score:.6f}.png"
+        file_name = f"sample_{idx:02d}_steer_{score:.6f}.png"
         save_tensor_image(image_tensor, out_dir / file_name)
 
     if args.eval_reward == "lpips":
@@ -241,6 +251,9 @@ def main():
         )
 
     print("Saved outputs to:", out_dir)
+    print(f"Steering reward used: {steer_reward_name}")
+    if args.eval_reward != "none":
+        print(f"Evaluation reward used: {args.eval_reward}")
     print(
         "Final steering reward stats: "
         f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"

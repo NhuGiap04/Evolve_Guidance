@@ -28,6 +28,19 @@ from seg.diffusers_patch.pipeline_using_Stein_SDXL import pipeline_using_stein_s
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
+
+def build_reward_scorer(name, dtype, device):
+    normalized = name.lower()
+    if normalized in {"image_reward", "imagereward", "image_reward_score"}:
+        return ImageRewardScorer(dtype=dtype, device=device)
+    if normalized in {"pick", "pick_score"}:
+        return PickScoreScorer(dtype=dtype, device=device)
+    if normalized in {"clip", "clip_score"}:
+        return CLIPScorer(dtype=dtype, device=device)
+    raise NotImplementedError(
+        f"Unsupported reward function: {name}. Supported scorers: image_reward, pick, clip"
+    )
+
 class DiffusionModelSampler:
     def __init__(self, config, *args, **kwargs):
         """Initialize the Sampler with the given configuration."""
@@ -184,19 +197,22 @@ class DiffusionModelSampler:
         ]
         self.eval_prompts, self.eval_prompt_metadata = zip(*prompt_batch)
 
-        # Retrieve the reward function from implemented local scorers.
-        print(f"Using reward function {self.config.reward_fn}")
-        if self.config.reward_fn in {"image_reward", "imagereward", "image_reward_score"}:
-            self.reward_fn = ImageRewardScorer(dtype=self.inference_dtype, device=self.accelerator.device)
-        elif self.config.reward_fn in {"pick", "pick_score"}:
-            self.reward_fn = PickScoreScorer(dtype=self.inference_dtype, device=self.accelerator.device)
-        elif self.config.reward_fn in {"clip", "clip_score"}:
-            self.reward_fn = CLIPScorer(dtype=self.inference_dtype, device=self.accelerator.device)
-        else:
-            raise NotImplementedError(
-                f"Unsupported reward function: {self.config.reward_fn}. "
-                "Supported scorers: image_reward, pick, clip"
-            )
+        # reward_fn is used as the steering target during inference.
+        print(f"Using steering reward function {self.config.reward_fn}")
+        self.reward_fn = build_reward_scorer(
+            self.config.reward_fn,
+            dtype=self.inference_dtype,
+            device=self.accelerator.device,
+        )
+
+        # eval_reward_fn is used only for reporting/saving evaluation metrics.
+        eval_reward_name = getattr(self.config, "eval_reward_fn", None) or self.config.reward_fn
+        print(f"Using evaluation reward function {eval_reward_name}")
+        self.eval_reward_fn = build_reward_scorer(
+            eval_reward_name,
+            dtype=self.inference_dtype,
+            device=self.accelerator.device,
+        )
 
     def sample_images(self, train=False):
         """Sample images using the diffusion model."""
@@ -274,7 +290,7 @@ class DiffusionModelSampler:
                         )
                         images = result.images if hasattr(result, "images") else result[0]
 
-                rewards = self.reward_fn(images, prompts_batch)
+                rewards = self.eval_reward_fn(images, prompts_batch)
 
                 self.info_eval_vis["eval_rewards_img"].append(rewards.clone().detach())
                 self.info_eval_vis["eval_image"].append(images.clone().detach())

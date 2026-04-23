@@ -20,6 +20,7 @@ set -euo pipefail
 # Env overrides:
 #   PYTHON_BIN         (default: python)
 #   RUN_SCRIPT         (default: examples/sd.py)
+#   STEER_REWARD       (default: use script/config default)
 #   EVAL_REWARD        (default: image_reward)
 #   COMMON_ARGS        (default: "")
 #   STREAM_LOGS=1      (mirror child output to terminal with tee)
@@ -35,6 +36,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 RUN_SCRIPT="${RUN_SCRIPT:-examples/sd.py}"
+STEER_REWARD="${STEER_REWARD:-}"
 EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 COMMON_ARGS="${COMMON_ARGS:-}"
 STREAM_LOGS="${STREAM_LOGS:-0}"
@@ -133,6 +135,10 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
     --output-dir "$run_dir"
     --device cuda
   )
+
+  if [ -n "$STEER_REWARD" ]; then
+    cmd+=(--steer-reward "$STEER_REWARD")
+  fi
 
   if [ -n "$COMMON_ARGS" ]; then
     # shellcheck disable=SC2206

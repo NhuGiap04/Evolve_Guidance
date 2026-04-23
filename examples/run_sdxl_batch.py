@@ -141,6 +141,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
         args.device,
     ]
 
+    _append_optional_arg(cmd, "--steer-reward", args.steer_reward)
     _append_optional_arg(cmd, "--seed", args.seed)
     _append_optional_arg(cmd, "--num-steps", args.num_steps)
     _append_optional_arg(cmd, "--batch-size", args.batch_size)
@@ -224,6 +225,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="image_reward",
         choices=["none", "clip", "pick", "image_reward"],
+    )
+    parser.add_argument(
+        "--steer-reward",
+        type=str,
+        default=None,
+        choices=["clip", "pick", "image_reward"],
     )
     parser.add_argument("--device", type=str, default="cuda")
 

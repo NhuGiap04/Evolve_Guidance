@@ -13,6 +13,7 @@ def general():
     
     # prompting
     config.reward_fn = "clip"
+    config.eval_reward_fn = None
     # mixed precision training. options are "fp16", "bf16", and "no". half-precision speeds up training significantly.
     config.mixed_precision  = "fp16"
     # run name for wandb logging and checkpoint saving -- if not provided, will be auto-generated based on the datetime.
