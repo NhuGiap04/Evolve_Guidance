@@ -275,19 +275,31 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _extract_eval_stats(stdout: str) -> Dict[str, str]:
-    """Parse final eval reward stats from gradient_sdxl.py stdout."""
-    # Looks for: Final eval reward stats (image_reward): mean=-0.330566 max=-0.330566
-    result = {"mean": "", "max": ""}
+def _extract_reward_stats(stdout: str) -> Dict[str, str]:
+    """Parse final steering/eval reward stats from gradient_sdxl.py stdout."""
+    # Looks for:
+    # - Final eval reward stats (...): mean=-0.330566 max=-0.330566
+    # - Final steering reward stats: mean=-0.330566 max=-0.330566
+    result = {
+        "steer_mean": "",
+        "steer_max": "",
+        "eval_mean": "",
+        "eval_max": "",
+    }
     for line in stdout.splitlines():
         if "Final eval reward stats" in line:
             # Extract mean and max using regex
             import re
             m = re.search(r"mean=([\-0-9.eE]+) max=([\-0-9.eE]+)", line)
             if m:
-                result["mean"] = m.group(1)
-                result["max"] = m.group(2)
-            break
+                result["eval_mean"] = m.group(1)
+                result["eval_max"] = m.group(2)
+        elif "Final steering reward stats" in line:
+            import re
+            m = re.search(r"mean=([\-0-9.eE]+) max=([\-0-9.eE]+)", line)
+            if m:
+                result["steer_mean"] = m.group(1)
+                result["steer_max"] = m.group(2)
     return result
 
 def main() -> int:
@@ -359,8 +371,10 @@ def main() -> int:
             eval_rows.append({
                 "index": global_idx,
                 "prompt": prompt,
-                "mean": "",
-                "max": "",
+                "steer_mean": "",
+                "steer_max": "",
+                "eval_mean": "",
+                "eval_max": "",
                 "status": "DRY",
             })
             continue
@@ -374,7 +388,7 @@ def main() -> int:
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
-        eval_stats = _extract_eval_stats(proc.stdout or "")
+        reward_stats = _extract_reward_stats(proc.stdout or "")
         if proc.returncode == 0:
             success_count += 1
             status = _c("OK", _Style.GREEN, _Style.BOLD)
@@ -387,8 +401,10 @@ def main() -> int:
             eval_rows.append({
                 "index": global_idx,
                 "prompt": prompt,
-                "mean": eval_stats["mean"],
-                "max": eval_stats["max"],
+                "steer_mean": reward_stats["steer_mean"],
+                "steer_max": reward_stats["steer_max"],
+                "eval_mean": reward_stats["eval_mean"],
+                "eval_max": reward_stats["eval_max"],
                 "status": "OK",
             })
             print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
@@ -403,8 +419,10 @@ def main() -> int:
             eval_rows.append({
                 "index": global_idx,
                 "prompt": prompt,
-                "mean": eval_stats["mean"],
-                "max": eval_stats["max"],
+                "steer_mean": reward_stats["steer_mean"],
+                "steer_max": reward_stats["steer_max"],
+                "eval_mean": reward_stats["eval_mean"],
+                "eval_max": reward_stats["eval_max"],
                 "status": "FAIL",
             })
             print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
@@ -426,7 +444,18 @@ def main() -> int:
     # Save eval summary CSV
     csv_path = args.output_dir / "batch_eval_summary.csv"
     with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["index", "prompt", "mean", "max", "status"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "index",
+                "prompt",
+                "steer_mean",
+                "steer_max",
+                "eval_mean",
+                "eval_max",
+                "status",
+            ],
+        )
         writer.writeheader()
         for row in eval_rows:
             writer.writerow(row)
