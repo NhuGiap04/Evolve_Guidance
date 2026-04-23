@@ -61,6 +61,7 @@ mkdir -p "$OUTPUT_ROOT" "$OUTPUT_ROOT/_logs"
 declare -a PIDS=()
 declare -a PID_GPU=()
 declare -a PID_RUN=()
+FAILURES=0
 
 slot_wait() {
   local max_jobs="$1"
@@ -81,7 +82,14 @@ slot_wait() {
         next_pid_gpu+=("${PID_GPU[$i]:-unknown_gpu}")
         next_pid_run+=("${PID_RUN[$i]:-unknown_run}")
       else
-        wait "$pid" || true
+        local run_name="${PID_RUN[$i]:-unknown_run}"
+        local gpu="${PID_GPU[$i]:-unknown_gpu}"
+        if wait "$pid"; then
+          echo "[$run_name] done on gpu=$gpu"
+        else
+          echo "[$run_name] failed on gpu=$gpu" >&2
+          FAILURES=$((FAILURES + 1))
+        fi
       fi
     done
 
@@ -147,7 +155,7 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
   run_idx=$((run_idx + 1))
 done < "$PROMPTS_FILE"
 
-failures=0
+failures="$FAILURES"
 for i in "${!PIDS[@]}"; do
   pid="${PIDS[$i]:-}"
   if [ -z "$pid" ]; then
