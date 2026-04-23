@@ -631,6 +631,7 @@ def pipeline_using_gradient_sdxl(
                 continue
 
             t_int = _to_timestep_int(t)
+            noise_pred = _predict_noise(latents, t)
             is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
 
             pre_stein_latents = None
@@ -707,8 +708,6 @@ def pipeline_using_gradient_sdxl(
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
                     post_stein_latents = latents.detach().clone()
-
-            noise_pred = _predict_noise(latents, t)
 
             if hasattr(self.scheduler, "previous_timestep"):
                 prev_t = self.scheduler.previous_timestep(t)

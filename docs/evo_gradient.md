@@ -18,7 +18,7 @@ Target behavior for sampling:
 5. After the Stein refinement at timestep $t$, propose $x_{t-1}$ with the manifold-preserving form:
 
 $$
-x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_t + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t,t) + \sigma_t z,
+x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_{0|t} + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t^{\mathrm{pre}},t) + \sigma_t z,
 \quad z \sim \mathcal N(0, I).
 $$
 
@@ -141,11 +141,11 @@ For each timestep `t` in scheduler order (descending):
 	  - Build `score_q`.
 	  - Compute SVGD direction using kernel over particles in the same prompt group.
 	  - AdaGrad update: `x_t <- x_t + eta_adapt * step`.
-	- Recompute noise prediction `epsilon_theta(x_t, t)` on refined particles.
+	- Keep pre-Stein noise prediction $\epsilon_\theta(x_t^{\mathrm{pre}}, t)$ for the proposal noise term.
 	- Propose $x_{t-1}$ via manifold-preserving transition:
 
 $$
-x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_t + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t,t) + \sigma_t z.
+x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,x_{(0|t)} + \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,\epsilon_\theta(x_t^{\mathrm{pre}},t) + \sigma_t z.
 $$
 
 4. Continue to next timestep.
@@ -186,6 +186,7 @@ steer_end_eff = timesteps[-1] if steer_end is None else steer_end
 latents = init_latents(batch_size * num_particles)
 
 for t in timesteps:
+	 noise_pred_pre = predict_noise(latents, t)
 	 is_steered = (steer_end_eff <= int(t) <= steer_start_eff)
 
 	 if is_steered:
@@ -206,14 +207,14 @@ for t in timesteps:
 
 				latents = latents + eta_adapt * step
 
-	 noise_pred = predict_noise(latents, t)
+	 x0_pred = predict_x0(latents, t, noise_pred_pre)  # x_(0|t)
 	 sigma_t = scheduler_sigma(t, eta)
 	 alpha_bar_prev = scheduler_alpha_bar_prev(t)
 
 	 z = torch.randn_like(latents)
 	 latents = (
-		  torch.sqrt(alpha_bar_prev) * latents
-		  + torch.sqrt(1.0 - alpha_bar_prev - sigma_t**2) * noise_pred
+		  torch.sqrt(alpha_bar_prev) * x0_pred
+		  + torch.sqrt(1.0 - alpha_bar_prev - sigma_t**2) * noise_pred_pre
 		  + sigma_t * z
 	 )
 ```
