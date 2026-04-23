@@ -1,0 +1,30 @@
+{
+  "prompt": "Ornate archway inset with matching fireplace in room.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.34929299354553,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.226806640625,
+    0.234619140625,
+    0.2255859375,
+    0.2218017578125
+  ],
+  "steer_reward_stats": {
+    "mean": 0.227203369140625,
+    "max": 0.234619140625,
+    "min": 0.2218017578125
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    0.7685546875,
+    1.0107421875,
+    0.467041015625,
+    -0.042938232421875
+  ],
+  "eval_reward_stats": {
+    "mean": 0.5508499145507812,
+    "max": 1.0107421875,
+    "min": -0.042938232421875
+  }
+}

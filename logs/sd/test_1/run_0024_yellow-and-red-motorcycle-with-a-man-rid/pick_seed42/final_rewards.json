@@ -1,0 +1,30 @@
+{
+  "prompt": "yellow and red motorcycle with a man riding on it next to grass",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.22452282905579,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.24560546875,
+    0.2437744140625,
+    0.231201171875,
+    0.22802734375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.237152099609375,
+    "max": 0.24560546875,
+    "min": 0.22802734375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    0.92236328125,
+    -0.69384765625,
+    0.63818359375,
+    -1.1533203125
+  ],
+  "eval_reward_stats": {
+    "mean": -0.0716552734375,
+    "max": 0.92236328125,
+    "min": -1.1533203125
+  }
+}

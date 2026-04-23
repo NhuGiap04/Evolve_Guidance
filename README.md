@@ -110,6 +110,20 @@ Batch outputs:
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
 
+## Multi-GPU Inference With Accelerate
+
+For DAS-style multi-GPU inference, launch one process per GPU with `accelerate`. Each process now receives a distinct prompt slice and rank 0 gathers the results for logging and image saving.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --num_processes 4 DAS.py --config config/sdxl.py:pick
+```
+
+Notes:
+
+- `config.sample.batch_size` is per GPU.
+- Total generated samples per evaluation run are `batch_size * num_processes * max_vis_images`.
+- This is data-parallel inference: each GPU loads a full pipeline replica and works on different prompts.
+
 ## Main Options
 
 - `--config`: reward preset (`pick`, `clip`, `seg`)

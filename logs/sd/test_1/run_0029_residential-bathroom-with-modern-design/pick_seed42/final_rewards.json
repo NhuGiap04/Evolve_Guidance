@@ -1,0 +1,30 @@
+{
+  "prompt": "Residential bathroom with modern design and tile floor.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.77168893814087,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2056884765625,
+    0.2108154296875,
+    0.212646484375,
+    0.215576171875
+  ],
+  "steer_reward_stats": {
+    "mean": 0.211181640625,
+    "max": 0.215576171875,
+    "min": 0.2056884765625
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.01580810546875,
+    -0.0699462890625,
+    0.298095703125,
+    -0.0850830078125
+  ],
+  "eval_reward_stats": {
+    "mean": 0.0318145751953125,
+    "max": 0.298095703125,
+    "min": -0.0850830078125
+  }
+}

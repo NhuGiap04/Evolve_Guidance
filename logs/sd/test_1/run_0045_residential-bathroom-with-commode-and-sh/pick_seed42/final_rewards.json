@@ -1,0 +1,30 @@
+{
+  "prompt": "Residential bathroom with commode and shower and plain white walls.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.3441104888916,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2166748046875,
+    0.208984375,
+    0.221435546875,
+    0.22900390625
+  ],
+  "steer_reward_stats": {
+    "mean": 0.219024658203125,
+    "max": 0.22900390625,
+    "min": 0.208984375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.6220703125,
+    -1.5478515625,
+    0.689453125,
+    1.130859375
+  ],
+  "eval_reward_stats": {
+    "mean": -0.08740234375,
+    "max": 1.130859375,
+    "min": -1.5478515625
+  }
+}

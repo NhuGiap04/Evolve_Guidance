@@ -1,0 +1,30 @@
+{
+  "prompt": "A person sitting on a motorcycle in the grass.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.92345857620239,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2340087890625,
+    0.2271728515625,
+    0.2294921875,
+    0.232421875
+  ],
+  "steer_reward_stats": {
+    "mean": 0.23077392578125,
+    "max": 0.2340087890625,
+    "min": 0.2271728515625
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    1.751953125,
+    1.2666015625,
+    1.58203125,
+    1.3359375
+  ],
+  "eval_reward_stats": {
+    "mean": 1.484130859375,
+    "max": 1.751953125,
+    "min": 1.2666015625
+  }
+}

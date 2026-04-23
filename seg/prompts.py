@@ -32,4 +32,4 @@ def from_file_in_order(path, idx, low=None, high=None, all=False):
     return prompts[idx % len(prompts)], {} 
 
 def eval_hps_v2_all(idx):
-    return from_file("hps_v2_all_eval.txt")
+    return from_file_in_order("hps_v2_all_eval.txt", idx)

@@ -6,11 +6,12 @@ import time
 from absl import app, flags
 from ml_collections import config_flags
 from accelerate import Accelerator
-from accelerate.utils import set_seed, ProjectConfiguration
+from accelerate.utils import set_seed, ProjectConfiguration, gather_object
 from accelerate.logging import get_logger
 from diffusers import DiffusionPipeline, StableDiffusionPipeline, StableDiffusionXLPipeline, DDIMScheduler, UNet2DConditionModel
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
+import seg.prompts as prompts_file
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
@@ -40,11 +41,17 @@ class DiffusionModelSampler:
         self.config.run_name = self.config.run_name or self.unique_id
         self.log_dir = f"logs/{self.config.project_name}/{self.config.reward_fn}/{self.config.run_name}/eval_vis"
         os.makedirs(self.log_dir, exist_ok=True)
-        with open(f"logs/{self.config.project_name}/{self.config.reward_fn}/{self.config.run_name}/config.json", 'w') as json_file:
-            json.dump(config.to_dict(), json_file, indent=4)
 
         # Setup the accelerator and environment
         self.setup_accelerator(*args, **kwargs)
+
+        if self.accelerator.is_main_process:
+            with open(
+                f"logs/{self.config.project_name}/{self.config.reward_fn}/{self.config.run_name}/config.json",
+                "w",
+            ) as json_file:
+                json.dump(config.to_dict(), json_file, indent=4)
+        self.accelerator.wait_for_everyone()
 
         # Load models and scheduler
         self.load_models_and_scheduler()
@@ -169,12 +176,13 @@ class DiffusionModelSampler:
         """Prepare the prompt and reward functions."""
         # Retrieve the prompt function from ddpo_pytorch.prompts using the config
         self.prompt_fn = getattr(prompts_file, self.config.prompt_fn)
-        self.eval_prompts, self.eval_prompt_metadata = zip(
-                *[
-                    self.prompt_fn(i) 
-                    for i in range(self.config.sample.batch_size * self.config.max_vis_images)
-                ]
-            ) # Use fixed set of evaluation prompts
+        local_prompt_count = self.config.sample.batch_size * self.config.max_vis_images
+        global_prompt_offset = self.accelerator.process_index * local_prompt_count
+        prompt_batch = [
+            self.prompt_fn(global_prompt_offset + i)
+            for i in range(local_prompt_count)
+        ]
+        self.eval_prompts, self.eval_prompt_metadata = zip(*prompt_batch)
 
         # Retrieve the reward function from implemented local scorers.
         print(f"Using reward function {self.config.reward_fn}")
@@ -275,37 +283,42 @@ class DiffusionModelSampler:
     def log_evaluation(self, epoch=None, inner_epoch=None):
         """Log results to the accelerator and external tracking systems."""
 
-        self.info_eval = {k: torch.mean(torch.stack(v)) for k, v in self.info_eval.items()}
-        self.info_eval = self.accelerator.reduce(self.info_eval, reduction="mean")
+        reduced_info = {}
+        for key, values in self.info_eval.items():
+            local_value = torch.mean(torch.stack(values))
+            reduced_info[key] = self.accelerator.reduce(local_value, reduction="mean")
 
-        ims = torch.cat(self.info_eval_vis["eval_image"])
-        rewards = torch.cat(self.info_eval_vis["eval_rewards_img"])
-        prompts = self.info_eval_vis["eval_prompts"]
-        
-        self.info_eval["eval_rewards"] = rewards.mean()
-        self.info_eval["eval_rewards_std"] = rewards.std()
+        local_images = torch.cat(self.info_eval_vis["eval_image"])
+        local_rewards = torch.cat(self.info_eval_vis["eval_rewards_img"])
+        gathered_images = self.accelerator.gather_for_metrics(local_images)
+        gathered_rewards = self.accelerator.gather_for_metrics(local_rewards)
+        gathered_prompts = gather_object(list(self.info_eval_vis["eval_prompts"]))
+        if gathered_prompts and isinstance(gathered_prompts[0], list):
+            gathered_prompts = [prompt for prompt_group in gathered_prompts for prompt in prompt_group]
 
-        self.accelerator.log(self.info_eval, step=self.global_step)
+        reduced_info["eval_rewards"] = gathered_rewards.mean()
+        reduced_info["eval_rewards_std"] = gathered_rewards.std()
 
-        images  = []
-        for i, image in enumerate(ims):
-            prompt = prompts[i]
-            reward = rewards[i]
-            if image.min() < 0: # normalize unnormalized images
-                image = (image.clone().detach() / 2 + 0.5).clamp(0, 1)
+        if self.accelerator.is_main_process:
+            self.accelerator.log(reduced_info, step=self.global_step)
 
-            pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-            if epoch is not None and inner_epoch is not None:
-                caption = f"{epoch:03d}_{inner_epoch:03d}_{i:03d}_{prompt} | reward: {reward}"
-            else:
-                caption = f"{i:03d}_{prompt} | reward: {reward}"
-            pil.save(f"{self.log_dir}/{caption}.png")
+            images = []
+            for i, (image, prompt, reward) in enumerate(zip(gathered_images, gathered_prompts, gathered_rewards)):
+                if image.min() < 0:
+                    image = (image.clone().detach() / 2 + 0.5).clamp(0, 1)
 
-            pil = pil.resize((256, 256))
-            caption = f"{prompt:.25} | {reward:.2f}"
-            images.append(wandb.Image(pil, caption=caption)) 
+                reward_value = reward.item()
+                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+                if epoch is not None and inner_epoch is not None:
+                    caption = f"{epoch:03d}_{inner_epoch:03d}_{i:03d}_{prompt} | reward: {reward_value}"
+                else:
+                    caption = f"{i:03d}_{prompt} | reward: {reward_value}"
+                pil.save(f"{self.log_dir}/{caption}.png")
 
-        self.accelerator.log({"eval_images": images},step=self.global_step)
+                pil = pil.resize((256, 256))
+                images.append(wandb.Image(pil, caption=f"{prompt:.25} | {reward_value:.2f}"))
+
+            self.accelerator.log({"eval_images": images}, step=self.global_step)
 
         # Log additional details if needed
         self.logger.info(f"Logged Evaluation results for step {self.global_step}")

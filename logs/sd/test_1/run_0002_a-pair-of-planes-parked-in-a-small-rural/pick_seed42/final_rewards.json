@@ -1,0 +1,30 @@
+{
+  "prompt": "A pair of planes parked in a small rural airfield.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.22158288955688,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.205810546875,
+    0.2152099609375,
+    0.2086181640625,
+    0.2099609375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.20989990234375,
+    "max": 0.2152099609375,
+    "min": 0.205810546875
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.347900390625,
+    -0.040374755859375,
+    0.147705078125,
+    0.36669921875
+  ],
+  "eval_reward_stats": {
+    "mean": 0.03153228759765625,
+    "max": 0.36669921875,
+    "min": -0.347900390625
+  }
+}

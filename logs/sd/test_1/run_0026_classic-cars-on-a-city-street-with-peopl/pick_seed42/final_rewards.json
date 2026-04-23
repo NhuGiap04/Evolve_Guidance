@@ -1,0 +1,30 @@
+{
+  "prompt": "classic cars on a city street with people and a dog",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.5748279094696,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2222900390625,
+    0.213623046875,
+    0.2235107421875,
+    0.2220458984375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.220367431640625,
+    "max": 0.2235107421875,
+    "min": 0.213623046875
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    0.82373046875,
+    -1.2353515625,
+    0.4609375,
+    0.2437744140625
+  ],
+  "eval_reward_stats": {
+    "mean": 0.073272705078125,
+    "max": 0.82373046875,
+    "min": -1.2353515625
+  }
+}
