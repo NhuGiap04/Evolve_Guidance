@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run SD examples in parallel across GPUs (without DAS/accelerate).
+# Run Stein-guided SD examples in parallel across GPUs (without DAS/accelerate).
 #
 # Notes:
 # - This launcher starts one Python process per prompt and pins each to a GPU.
+# - This launcher starts the SD 1.5 Stein example by default.
+# - Set `RUN_SCRIPT=examples/sdxl.py` if you want the SDXL Stein path instead.
 #
 # Usage:
 #   bash examples/run_parallel_inference.sh prompts/hps_v2_all_eval.txt
@@ -56,6 +58,7 @@ if [ ! -f "$RUN_SCRIPT" ]; then
   echo "Error: run script not found: $RUN_SCRIPT" >&2
   exit 2
 fi
+
 
 IFS=',' read -r -a GPUS <<< "$GPU_IDS_CSV"
 if [ "${#GPUS[@]}" -eq 0 ]; then

@@ -146,8 +146,22 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
     _append_optional_arg(cmd, "--batch-size", args.batch_size)
     _append_optional_arg(cmd, "--guidance-scale", args.guidance_scale)
     _append_optional_arg(cmd, "--eta", args.eta)
+    _append_optional_arg(cmd, "--num-particles", args.num_particles)
+    _append_optional_arg(cmd, "--batch-p", args.batch_p)
+    _append_optional_arg(cmd, "--stein-step", args.stein_step)
+    _append_optional_arg(cmd, "--stein-loop", args.stein_loop)
+    _append_optional_arg(cmd, "--stein-kernel", args.stein_kernel)
+    _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
+    _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
+    _append_optional_arg(cmd, "--steer-start", args.steer_start)
+    _append_optional_arg(cmd, "--steer-end", args.steer_end)
     _append_optional_arg(cmd, "--lpips-ref-dir", args.lpips_ref_dir)
     _append_optional_arg(cmd, "--lpips-net", args.lpips_net)
+
+    if args.save_intermediate_images:
+        cmd.append("--save-intermediate-images")
+        _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
+        _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
 
     return cmd
 
@@ -227,6 +241,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--guidance-scale", type=float, default=None)
     parser.add_argument("--eta", type=float, default=None)
+    parser.add_argument("--num-particles", type=int, default=None)
+    parser.add_argument("--batch-p", type=int, default=None)
+    parser.add_argument("--stein-step", type=float, default=None)
+    parser.add_argument("--stein-loop", type=int, default=None)
+    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
+    parser.add_argument("--stein-adagrad-eps", type=float, default=None)
+    parser.add_argument("--kl-coeff", type=float, default=None)
+    parser.add_argument("--steer-start", type=int, default=None)
+    parser.add_argument("--steer-end", type=int, default=None)
+    parser.add_argument("--save-intermediate-images", action="store_true")
+    parser.add_argument("--trace-decode-batch-size", type=int, default=None)
+    parser.add_argument("--intermediate-max-samples", type=int, default=None)
 
     parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")
     parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")
