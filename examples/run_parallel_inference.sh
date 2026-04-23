@@ -65,19 +65,30 @@ declare -a PID_RUN=()
 slot_wait() {
   local max_jobs="$1"
   while [ "${#PIDS[@]}" -ge "$max_jobs" ]; do
-    local i
+    local i pid
+    local -a next_pids=()
+    local -a next_pid_gpu=()
+    local -a next_pid_run=()
+
     for i in "${!PIDS[@]}"; do
-      local pid="${PIDS[$i]}"
-      if ! kill -0 "$pid" 2>/dev/null; then
+      pid="${PIDS[$i]:-}"
+      if [ -z "$pid" ]; then
+        continue
+      fi
+
+      if kill -0 "$pid" 2>/dev/null; then
+        next_pids+=("$pid")
+        next_pid_gpu+=("${PID_GPU[$i]:-unknown_gpu}")
+        next_pid_run+=("${PID_RUN[$i]:-unknown_run}")
+      else
         wait "$pid" || true
-        unset 'PIDS[i]'
-        unset 'PID_GPU[i]'
-        unset 'PID_RUN[i]'
-        PIDS=("${PIDS[@]}")
-        PID_GPU=("${PID_GPU[@]}")
-        PID_RUN=("${PID_RUN[@]}")
       fi
     done
+
+    PIDS=("${next_pids[@]}")
+    PID_GPU=("${next_pid_gpu[@]}")
+    PID_RUN=("${next_pid_run[@]}")
+
     sleep 1
   done
 }
@@ -138,9 +149,12 @@ done < "$PROMPTS_FILE"
 
 failures=0
 for i in "${!PIDS[@]}"; do
-  pid="${PIDS[$i]}"
-  run_name="${PID_RUN[$i]}"
-  gpu="${PID_GPU[$i]}"
+  pid="${PIDS[$i]:-}"
+  if [ -z "$pid" ]; then
+    continue
+  fi
+  run_name="${PID_RUN[$i]:-unknown_run}"
+  gpu="${PID_GPU[$i]:-unknown_gpu}"
   if wait "$pid"; then
     echo "[$run_name] done on gpu=$gpu"
   else
