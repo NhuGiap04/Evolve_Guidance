@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run Stein-guided examples in parallel across GPUs (without DAS/accelerate).
+# Run SD examples in parallel across GPUs (without DAS/accelerate).
 #
 # Notes:
-# - Current Stein implementation in this repo is SDXL-focused via examples/sdxl.py.
 # - This launcher starts one Python process per prompt and pins each to a GPU.
 #
 # Usage:
 #   bash examples/run_parallel_inference.sh prompts/hps_v2_all_eval.txt
 #   bash examples/run_parallel_inference.sh prompts/hps_v2_all_eval.txt "pick" "0,1,2,3"
-#   bash examples/run_parallel_inference.sh prompts/hps_v2_all_eval.txt "pick" "0,1" "logs/sdxl_parallel"
+#   bash examples/run_parallel_inference.sh prompts/hps_v2_all_eval.txt "pick" "0,1" "logs/sd_parallel"
 #
 # Args:
 #   1) prompts file    (required)
 #   2) config preset   (default: pick)
 #   3) gpu ids csv     (default: 0)
-#   4) output root     (default: logs/sdxl_parallel)
+#   4) output root     (default: logs/sd_parallel)
 #
 # Env overrides:
 #   PYTHON_BIN         (default: python)
-#   STEIN_SCRIPT       (default: examples/sdxl.py)
+#   RUN_SCRIPT         (default: examples/sd.py)
 #   EVAL_REWARD        (default: image_reward)
 #   COMMON_ARGS        (default: "")
 #   DRY_RUN=1          (print commands only)
@@ -28,10 +27,10 @@ set -euo pipefail
 PROMPTS_FILE="${1:-}"
 CONFIG_PRESET="${2:-pick}"
 GPU_IDS_CSV="${3:-0}"
-OUTPUT_ROOT="${4:-logs/sdxl_parallel}"
+OUTPUT_ROOT="${4:-logs/sd_parallel}"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-STEIN_SCRIPT="${STEIN_SCRIPT:-examples/sdxl.py}"
+RUN_SCRIPT="${RUN_SCRIPT:-examples/sd.py}"
 EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 COMMON_ARGS="${COMMON_ARGS:-}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -46,8 +45,8 @@ if [ ! -f "$PROMPTS_FILE" ]; then
   exit 2
 fi
 
-if [ ! -f "$STEIN_SCRIPT" ]; then
-  echo "Error: stein script not found: $STEIN_SCRIPT" >&2
+if [ ! -f "$RUN_SCRIPT" ]; then
+  echo "Error: run script not found: $RUN_SCRIPT" >&2
   exit 2
 fi
 
@@ -103,7 +102,7 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
   slot_wait "${#GPUS[@]}"
 
   cmd=(
-    "$PYTHON_BIN" "$STEIN_SCRIPT"
+    "$PYTHON_BIN" "$RUN_SCRIPT"
     --config "$CONFIG_PRESET"
     --prompt "$prompt"
     --eval-reward "$EVAL_REWARD"
