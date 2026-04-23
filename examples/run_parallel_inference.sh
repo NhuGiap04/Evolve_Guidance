@@ -30,6 +30,9 @@ CONFIG_PRESET="${2:-pick}"
 GPU_IDS_CSV="${3:-0}"
 OUTPUT_ROOT="${4:-logs/sd_parallel}"
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
 PYTHON_BIN="${PYTHON_BIN:-python}"
 RUN_SCRIPT="${RUN_SCRIPT:-examples/sd.py}"
 EVAL_REWARD="${EVAL_REWARD:-image_reward}"
@@ -139,7 +142,7 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
 
   echo "[$run_name] gpu=$gpu"
   echo "[$run_name] prompt=$prompt"
-  echo "[$run_name] cmd: CUDA_VISIBLE_DEVICES=$gpu ${cmd[*]}"
+  echo "[$run_name] cmd: CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$REPO_ROOT ${cmd[*]}"
 
   if [ "$DRY_RUN" = "1" ]; then
     run_idx=$((run_idx + 1))
@@ -148,10 +151,12 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
 
   if [ "$STREAM_LOGS" = "1" ]; then
     (
+      export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
       CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}" 2>&1 | tee "$log_file"
     ) &
   else
     (
+      export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
       CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}"
     ) >"$log_file" 2>&1 &
   fi
