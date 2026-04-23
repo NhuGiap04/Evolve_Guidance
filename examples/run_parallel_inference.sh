@@ -22,6 +22,7 @@ set -euo pipefail
 #   RUN_SCRIPT         (default: examples/sd.py)
 #   EVAL_REWARD        (default: image_reward)
 #   COMMON_ARGS        (default: "")
+#   STREAM_LOGS=1      (mirror child output to terminal with tee)
 #   DRY_RUN=1          (print commands only)
 
 PROMPTS_FILE="${1:-}"
@@ -33,6 +34,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 RUN_SCRIPT="${RUN_SCRIPT:-examples/sd.py}"
 EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 COMMON_ARGS="${COMMON_ARGS:-}"
+STREAM_LOGS="${STREAM_LOGS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
 if [ -z "$PROMPTS_FILE" ]; then
@@ -144,9 +146,15 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
     continue
   fi
 
-  (
-    CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}"
-  ) >"$log_file" 2>&1 &
+  if [ "$STREAM_LOGS" = "1" ]; then
+    (
+      CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}" 2>&1 | tee "$log_file"
+    ) &
+  else
+    (
+      CUDA_VISIBLE_DEVICES="$gpu" "${cmd[@]}"
+    ) >"$log_file" 2>&1 &
+  fi
 
   PIDS+=("$!")
   PID_GPU+=("$gpu")
