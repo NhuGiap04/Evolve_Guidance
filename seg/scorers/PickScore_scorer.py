@@ -1,6 +1,6 @@
 import os
 import torch
-from transformers import AutoModel, CLIPProcessor
+from transformers import CLIPModel, CLIPProcessor
 import torchvision
 
 
@@ -14,7 +14,10 @@ class PickScoreScorer(torch.nn.Module):
 
         checkpoint_path = "yuvalkirstain/PickScore_v1"
         # checkpoint_path = f"{os.path.expanduser('~')}/.cache/PickScore_v1"
-        self.model = AutoModel.from_pretrained(checkpoint_path).eval().to(self.device, dtype=self.dtype)
+        # PickScore is CLIP-compatible and only needs CLIP feature APIs here.
+        # Using CLIPModel avoids AutoModel's broader import resolution, which can
+        # fail on environments with older timm builds.
+        self.model = CLIPModel.from_pretrained(checkpoint_path).eval().to(self.device, dtype=self.dtype)
 
         self.target_size =  224
         self.normalize = torchvision.transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
