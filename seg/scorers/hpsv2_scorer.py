@@ -1,8 +1,34 @@
 import os
+from pathlib import Path
+from urllib.request import urlretrieve
+
 import torch
 from transformers import CLIPProcessor
 import hpsv2
+import hpsv2.src.open_clip as hps_open_clip
 from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
+
+
+_BPE_VOCAB_NAME = "bpe_simple_vocab_16e6.txt.gz"
+_BPE_VOCAB_URL = "https://openaipublic.azureedge.net/clip/bpe_simple_vocab_16e6.txt.gz"
+
+
+def ensure_hpsv2_bpe_vocab():
+    open_clip_dir = Path(hps_open_clip.__file__).resolve().parent
+    vocab_path = open_clip_dir / _BPE_VOCAB_NAME
+    if vocab_path.exists():
+        return vocab_path
+
+    open_clip_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        urlretrieve(_BPE_VOCAB_URL, vocab_path)
+    except Exception as exc:
+        raise FileNotFoundError(
+            f"HPSv2 tokenizer vocab is missing at {vocab_path}. "
+            f"Download {_BPE_VOCAB_URL} to that path, or rerun with network access."
+        ) from exc
+
+    return vocab_path
 
 
 class HPSv2Scorer(torch.nn.Module):
@@ -34,6 +60,7 @@ class HPSv2Scorer(torch.nn.Module):
         )
 
         checkpoint_path = f"{os.path.expanduser('~')}/.cache/huggingface/hub/models--xswu--HPSv2/snapshots/697403c78157020a1ae59d23f111aa58ced35b0a/HPS_v2_compressed.pt"
+        ensure_hpsv2_bpe_vocab()
         # force download of model via score
         hpsv2.score([], "")
         checkpoint = torch.load(checkpoint_path, map_location=self.device)

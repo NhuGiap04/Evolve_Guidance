@@ -22,8 +22,9 @@ setup(
         "timm==1.0.14",
         "huggingface-hub==0.28.1",
         "fairscale==0.4.13",
+        "hpsv2==1.2.0",
+        "protobuf<4",
         "clip",
         "lpips",
-        "wandb",
     ]
 )

@@ -2,6 +2,18 @@ import os
 import torch
 import torch.nn as nn
 from transformers import CLIPProcessor
+
+# ImageReward imports ReFL from its package __init__, and ReFL conditionally imports
+# wandb through diffusers. Evaluation does not use wandb, and mismatched wandb/protobuf
+# versions can break import before the scorer is even constructed.
+os.environ.setdefault("WANDB_DISABLED", "true")
+try:
+    from diffusers.utils import import_utils as _diffusers_import_utils
+
+    _diffusers_import_utils._wandb_available = False
+except Exception:
+    pass
+
 from ImageReward.models.BLIP.blip_pretrain import BLIP_Pretrain
 from ImageReward import ImageReward_download
 
