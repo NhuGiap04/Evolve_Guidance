@@ -3,13 +3,14 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import csv
 
@@ -184,6 +185,8 @@ def _run_prompt_shard(
     shard_prompts: List[Tuple[int, str]],
     device: str,
     log_dir: Path,
+    repo_root: Path,
+    launch_env: Dict[str, str],
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
     rows: List[Dict[str, Any]] = []
     eval_rows: List[Dict[str, Any]] = []
@@ -215,7 +218,13 @@ def _run_prompt_shard(
             continue
 
         start = time.time()
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(repo_root),
+            env=launch_env,
+        )
         elapsed = time.time() - start
 
         stdout_path = log_dir / f"{run_name}.stdout.log"
@@ -338,7 +347,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional list of GPU devices to shard prompts across, e.g. --devices cuda:0 cuda:1.",
     )
-
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -404,6 +412,19 @@ def _extract_reward_stats(stdout: str) -> Dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    if not args.prompts_file.is_absolute() and not args.prompts_file.exists():
+        args.prompts_file = (repo_root / args.prompts_file).resolve()
+    if not args.sd_script.is_absolute() and not args.sd_script.exists():
+        args.sd_script = (repo_root / args.sd_script).resolve()
+
+    launch_env = os.environ.copy()
+    existing_pythonpath = launch_env.get("PYTHONPATH", "")
+    repo_root_str = str(repo_root)
+    launch_env["PYTHONPATH"] = (
+        repo_root_str if not existing_pythonpath else f"{repo_root_str}{os.pathsep}{existing_pythonpath}"
+    )
 
     if not args.prompts_file.exists():
         print(_c(f"Prompt file not found: {args.prompts_file}", _Style.RED, _Style.BOLD))
@@ -457,14 +478,21 @@ def main() -> int:
     ]
 
     if len(devices) == 1:
-        shard_rows, shard_eval_rows, shard_success = _run_prompt_shard(args, shard_inputs[0], devices[0], log_dir)
+        shard_rows, shard_eval_rows, shard_success = _run_prompt_shard(
+            args,
+            shard_inputs[0],
+            devices[0],
+            log_dir,
+            repo_root,
+            launch_env,
+        )
         rows.extend(shard_rows)
         eval_rows.extend(shard_eval_rows)
         success_count += shard_success
     else:
         with ThreadPoolExecutor(max_workers=len(shard_inputs)) as executor:
             futures = [
-                executor.submit(_run_prompt_shard, args, shard, devices[i], log_dir)
+                executor.submit(_run_prompt_shard, args, shard, devices[i], log_dir, repo_root, launch_env)
                 for i, shard in enumerate(shard_inputs)
             ]
             for future in as_completed(futures):
