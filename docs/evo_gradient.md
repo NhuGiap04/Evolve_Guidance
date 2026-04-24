@@ -207,7 +207,7 @@ for t in timesteps:
 
 				latents = latents + eta_adapt * step
 
-	 x0_pred = predict_x0(latents, t, noise_pred_pre)  # x_(0|t)
+	 x0_pred = predict_x0(latents, t, steered_noise_pred)  # x_(0|t)
 	 sigma_t = scheduler_sigma(t, eta)
 	 alpha_bar_prev = scheduler_alpha_bar_prev(t)
 

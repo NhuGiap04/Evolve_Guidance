@@ -702,11 +702,11 @@ def pipeline_using_gradient_sd(
             pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t ** 2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
 
-            # Pred x0|t = x0(steered_xt)
-            steered_noise_pred = _predict_noise(latents, t)
+            # Pred x0|t = x0(steered_xt). Reuse noise prediction when no steering changed latents.
+            steered_noise_pred = _predict_noise(latents, t) if is_steered_step else noise_pred
             pred_x0, _, _ = _predict_x0(latents, t_int, steered_noise_pred)
-            if is_steered_step:
-                post_stein_pred_x0 = pred_x0.detach().clone()
+            if is_steered_step and callback_on_step_end is not None:
+                post_stein_pred_x0 = pred_x0.detach()
 
             latents_dtype = latents.dtype
             latents = (
