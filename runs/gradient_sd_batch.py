@@ -125,6 +125,12 @@ def _append_optional_arg(cmd: List[str], flag: str, value: Optional[Any]) -> Non
     cmd.extend([flag, str(value)])
 
 
+def _tail_lines(text: str, count: int) -> List[str]:
+    if count <= 0 or not text:
+        return []
+    return text.splitlines()[-count:]
+
+
 def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, device: str) -> List[str]:
     cmd = [
         args.python,
@@ -201,6 +207,8 @@ def _run_prompt_shard(
 
         print(_c(f"[{device}] [{local_idx:03d}/{len(shard_prompts):03d}]", _Style.BOLD), _truncate(prompt, 100))
         print(_c("  output:", _Style.DIM), run_output_dir)
+        if args.verbose:
+            print(_c("  command:", _Style.DIM), " ".join(cmd))
 
         if args.dry_run:
             success_count += 1
@@ -231,6 +239,22 @@ def _run_prompt_shard(
         stderr_path = log_dir / f"{run_name}.stderr.log"
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+        if args.verbose:
+            print(_c("  stdout log:", _Style.DIM), stdout_path)
+            print(_c("  stderr log:", _Style.DIM), stderr_path)
+
+            stdout_tail = _tail_lines(proc.stdout or "", args.verbose_tail_lines)
+            stderr_tail = _tail_lines(proc.stderr or "", args.verbose_tail_lines)
+
+            if stdout_tail:
+                print(_c(f"  stdout tail ({len(stdout_tail)} lines):", _Style.CYAN, _Style.BOLD))
+                for line in stdout_tail:
+                    print("   ", line)
+
+            if stderr_tail:
+                print(_c(f"  stderr tail ({len(stderr_tail)} lines):", _Style.YELLOW, _Style.BOLD))
+                for line in stderr_tail:
+                    print("   ", line)
 
         reward_stats = _extract_reward_stats(proc.stdout or "")
         if proc.returncode == 0:
@@ -373,6 +397,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")
     parser.add_argument("--stop-on-error", action="store_true", help="Stop batch on first failed prompt.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing.")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=True,
+        help="Print detailed per-run diagnostics (enabled by default).",
+    )
+    parser.add_argument(
+        "--no-verbose",
+        dest="verbose",
+        action="store_false",
+        help="Disable verbose per-run diagnostics.",
+    )
+    parser.add_argument(
+        "--verbose-tail-lines",
+        type=int,
+        default=20,
+        help="How many stdout/stderr tail lines to print when --verbose is enabled.",
+    )
     parser.add_argument(
         "--log-dir",
         type=Path,
