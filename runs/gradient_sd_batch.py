@@ -237,6 +237,7 @@ def _run_prompt_shard(
 
         stdout_path = log_dir / f"{run_name}.stdout.log"
         stderr_path = log_dir / f"{run_name}.stderr.log"
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
         if args.verbose:
@@ -494,8 +495,14 @@ def main() -> int:
     selected_prompts = prompts[args.start_index:end_index]
     devices = args.devices if args.devices is not None else [args.device]
 
+    if not args.output_dir.is_absolute():
+        args.output_dir = (repo_root / args.output_dir).resolve()
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
     log_dir = args.log_dir or (args.output_dir / "_batch_logs")
+    if not log_dir.is_absolute():
+        log_dir = (repo_root / log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
     _title("Gradient SD Batch Runner")
