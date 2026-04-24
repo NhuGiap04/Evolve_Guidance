@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -302,6 +303,10 @@ def _extract_reward_stats(stdout: str) -> Dict[str, str]:
                 result["steer_max"] = m.group(2)
     return result
 
+
+def _fmt_reward_stat(value: str) -> str:
+    return value if value else "NA"
+
 def main() -> int:
     args = parse_args()
 
@@ -345,120 +350,139 @@ def main() -> int:
     rows: List[Dict[str, Any]] = []
     eval_rows: List[Dict[str, Any]] = []
     success_count = 0
+    csv_path = args.output_dir / "batch_eval_summary.csv"
+    csv_fieldnames = [
+        "index",
+        "prompt",
+        "steer_mean",
+        "steer_max",
+        "eval_mean",
+        "eval_max",
+        "status",
+    ]
 
     batch_start = time.time()
     total_runs = len(selected_prompts)
-    for local_idx, prompt in enumerate(selected_prompts, start=1):
-        global_idx = args.start_index + local_idx - 1
-        prompt_slug = _slugify(prompt)
-        run_name = f"run_{global_idx:04d}_{prompt_slug}"
-        run_output_dir = args.output_dir / run_name
+    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
+        eval_writer = csv.DictWriter(csv_file, fieldnames=csv_fieldnames)
+        eval_writer.writeheader()
+        csv_file.flush()
+        os.fsync(csv_file.fileno())
 
-        cmd = _build_sdxl_cmd(args, prompt, run_output_dir)
+        for local_idx, prompt in enumerate(selected_prompts, start=1):
+            global_idx = args.start_index + local_idx - 1
+            prompt_slug = _slugify(prompt)
+            run_name = f"run_{global_idx:04d}_{prompt_slug}"
+            run_output_dir = args.output_dir / run_name
 
-        print(_c(f"[{local_idx:03d}/{total_runs:03d}]", _Style.BOLD), _truncate(prompt, 100))
-        print(_c("  output:", _Style.DIM), run_output_dir)
+            cmd = _build_sdxl_cmd(args, prompt, run_output_dir)
 
-        if args.dry_run:
-            success_count += 1
-            print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
-            rows.append({
-                "index": global_idx,
-                "status": "DRY",
-                "elapsed": 0.0,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": "",
-                "steer_max": "",
-                "eval_mean": "",
-                "eval_max": "",
-                "status": "DRY",
-            })
-            continue
+            print(_c(f"[{local_idx:03d}/{total_runs:03d}]", _Style.BOLD), _truncate(prompt, 100))
+            print(_c("  output:", _Style.DIM), run_output_dir)
 
-        start = time.time()
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        elapsed = time.time() - start
+            if args.dry_run:
+                success_count += 1
+                print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
+                rows.append({
+                    "index": global_idx,
+                    "status": "DRY",
+                    "elapsed": 0.0,
+                    "prompt": prompt,
+                })
+                eval_row = {
+                    "index": global_idx,
+                    "prompt": prompt,
+                    "steer_mean": "",
+                    "steer_max": "",
+                    "eval_mean": "",
+                    "eval_max": "",
+                    "status": "DRY",
+                }
+                eval_rows.append(eval_row)
+                eval_writer.writerow(eval_row)
+                csv_file.flush()
+                os.fsync(csv_file.fileno())
+                continue
 
-        stdout_path = log_dir / f"{run_name}.stdout.log"
-        stderr_path = log_dir / f"{run_name}.stderr.log"
-        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+            start = time.time()
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            elapsed = time.time() - start
 
-        reward_stats = _extract_reward_stats(proc.stdout or "")
-        if proc.returncode == 0:
-            success_count += 1
-            status = _c("OK", _Style.GREEN, _Style.BOLD)
-            rows.append({
-                "index": global_idx,
-                "status": "OK",
-                "elapsed": elapsed,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": reward_stats["steer_mean"],
-                "steer_max": reward_stats["steer_max"],
-                "eval_mean": reward_stats["eval_mean"],
-                "eval_max": reward_stats["eval_max"],
-                "status": "OK",
-            })
-            print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
-        else:
-            status = _c("FAIL", _Style.RED, _Style.BOLD)
-            rows.append({
-                "index": global_idx,
-                "status": "FAIL",
-                "elapsed": elapsed,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": reward_stats["steer_mean"],
-                "steer_max": reward_stats["steer_max"],
-                "eval_mean": reward_stats["eval_mean"],
-                "eval_max": reward_stats["eval_max"],
-                "status": "FAIL",
-            })
-            print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
-            stderr_tail = (proc.stderr or "").splitlines()[-20:]
-            if stderr_tail:
-                print(_c("  stderr tail:", _Style.YELLOW, _Style.BOLD))
-                for line in stderr_tail:
-                    print("   ", line)
+            stdout_path = log_dir / f"{run_name}.stdout.log"
+            stderr_path = log_dir / f"{run_name}.stderr.log"
+            stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+            stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
-            if args.stop_on_error:
-                print(_c("Stopping due to --stop-on-error", _Style.YELLOW, _Style.BOLD))
-                break
+            reward_stats = _extract_reward_stats(proc.stdout or "")
+            if proc.returncode == 0:
+                success_count += 1
+                status = _c("OK", _Style.GREEN, _Style.BOLD)
+                rows.append({
+                    "index": global_idx,
+                    "status": "OK",
+                    "elapsed": elapsed,
+                    "prompt": prompt,
+                })
+                eval_row = {
+                    "index": global_idx,
+                    "prompt": prompt,
+                    "steer_mean": reward_stats["steer_mean"],
+                    "steer_max": reward_stats["steer_max"],
+                    "eval_mean": reward_stats["eval_mean"],
+                    "eval_max": reward_stats["eval_max"],
+                    "status": "OK",
+                }
+                eval_rows.append(eval_row)
+                eval_writer.writerow(eval_row)
+                csv_file.flush()
+                os.fsync(csv_file.fileno())
+                print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
+                print(
+                    _c(
+                        "  rewards: "
+                        f"eval_mean={_fmt_reward_stat(reward_stats['eval_mean'])} "
+                        f"eval_max={_fmt_reward_stat(reward_stats['eval_max'])} "
+                        f"steer_mean={_fmt_reward_stat(reward_stats['steer_mean'])} "
+                        f"steer_max={_fmt_reward_stat(reward_stats['steer_max'])}",
+                        _Style.DIM,
+                    )
+                )
+            else:
+                status = _c("FAIL", _Style.RED, _Style.BOLD)
+                rows.append({
+                    "index": global_idx,
+                    "status": "FAIL",
+                    "elapsed": elapsed,
+                    "prompt": prompt,
+                })
+                eval_row = {
+                    "index": global_idx,
+                    "prompt": prompt,
+                    "steer_mean": reward_stats["steer_mean"],
+                    "steer_max": reward_stats["steer_max"],
+                    "eval_mean": reward_stats["eval_mean"],
+                    "eval_max": reward_stats["eval_max"],
+                    "status": "FAIL",
+                }
+                eval_rows.append(eval_row)
+                eval_writer.writerow(eval_row)
+                csv_file.flush()
+                os.fsync(csv_file.fileno())
+                print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
+                stderr_tail = (proc.stderr or "").splitlines()[-20:]
+                if stderr_tail:
+                    print(_c("  stderr tail:", _Style.YELLOW, _Style.BOLD))
+                    for line in stderr_tail:
+                        print("   ", line)
 
-        print()
+                if args.stop_on_error:
+                    print(_c("Stopping due to --stop-on-error", _Style.YELLOW, _Style.BOLD))
+                    break
+
+            print()
 
     total_elapsed = time.time() - batch_start
     _print_summary(rows)
-
-    # Save eval summary CSV
-    csv_path = args.output_dir / "batch_eval_summary.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "index",
-                "prompt",
-                "steer_mean",
-                "steer_max",
-                "eval_mean",
-                "eval_max",
-                "status",
-            ],
-        )
-        writer.writeheader()
-        for row in eval_rows:
-            writer.writerow(row)
 
     print()
     _title("Result")
