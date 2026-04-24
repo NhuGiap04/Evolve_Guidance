@@ -9,6 +9,8 @@ from transformers import CLIPProcessor
 
 _BPE_VOCAB_NAME = "bpe_simple_vocab_16e6.txt.gz"
 _BPE_VOCAB_URL = "https://openaipublic.azureedge.net/clip/bpe_simple_vocab_16e6.txt.gz"
+_HPSV2_CACHE_DIR = Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub" / "models--xswu--HPSv2"
+_HPSV2_CHECKPOINT_NAME = "HPS_v2_compressed.pt"
 
 
 def ensure_hpsv2_bpe_vocab():
@@ -40,6 +42,23 @@ import hpsv2
 from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
 
 
+def find_hpsv2_checkpoint():
+    matches = sorted(_HPSV2_CACHE_DIR.glob(f"snapshots/*/{_HPSV2_CHECKPOINT_NAME}"))
+    if matches:
+        return matches[-1]
+
+    # Force hpsv2 to populate the Hugging Face cache, then search again.
+    hpsv2.score([], "")
+    matches = sorted(_HPSV2_CACHE_DIR.glob(f"snapshots/*/{_HPSV2_CHECKPOINT_NAME}"))
+    if matches:
+        return matches[-1]
+
+    raise FileNotFoundError(
+        f"Could not find {_HPSV2_CHECKPOINT_NAME} under {_HPSV2_CACHE_DIR}. "
+        "Run hpsv2.score([], '') with network access or download xswu/HPSv2 from Hugging Face."
+    )
+
+
 class HPSv2Scorer(torch.nn.Module):
     def __init__(self, dtype, device):
         super().__init__()
@@ -68,9 +87,7 @@ class HPSv2Scorer(torch.nn.Module):
             with_region_predictor=False
         )
 
-        checkpoint_path = f"{os.path.expanduser('~')}/.cache/huggingface/hub/models--xswu--HPSv2/snapshots/697403c78157020a1ae59d23f111aa58ced35b0a/HPS_v2_compressed.pt"
-        # force download of model via score
-        hpsv2.score([], "")
+        checkpoint_path = find_hpsv2_checkpoint()
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['state_dict'])
         self.tokenizer = get_tokenizer('ViT-H-14')
