@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -123,7 +124,7 @@ def _append_optional_arg(cmd: List[str], flag: str, value: Optional[Any]) -> Non
     cmd.extend([flag, str(value)])
 
 
-def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> List[str]:
+def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, device: str) -> List[str]:
     cmd = [
         args.python,
         str(args.sd_script),
@@ -138,7 +139,7 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
         "--eval-reward",
         args.eval_reward,
         "--device",
-        args.device,
+        device,
     ]
 
     _append_optional_arg(cmd, "--seed", args.seed)
@@ -166,6 +167,99 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
     _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
 
     return cmd
+
+
+def _split_prompts_across_devices(prompts: List[str], devices: List[str]) -> List[List[Tuple[int, str]]]:
+    if not devices:
+        raise ValueError("At least one device must be provided.")
+
+    shards: List[List[Tuple[int, str]]] = [[] for _ in range(len(devices))]
+    for index, prompt in enumerate(prompts):
+        shards[index % len(devices)].append((index, prompt))
+    return shards
+
+
+def _run_prompt_shard(
+    args: argparse.Namespace,
+    shard_prompts: List[Tuple[int, str]],
+    device: str,
+    log_dir: Path,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    rows: List[Dict[str, Any]] = []
+    eval_rows: List[Dict[str, Any]] = []
+    success_count = 0
+
+    for local_idx, (global_idx, prompt) in enumerate(shard_prompts, start=1):
+        prompt_slug = _slugify(prompt)
+        run_name = f"run_{global_idx:04d}_{prompt_slug}"
+        run_output_dir = args.output_dir / run_name
+
+        cmd = _build_sd_cmd(args, prompt, run_output_dir, device)
+
+        print(_c(f"[{device}] [{local_idx:03d}/{len(shard_prompts):03d}]", _Style.BOLD), _truncate(prompt, 100))
+        print(_c("  output:", _Style.DIM), run_output_dir)
+
+        if args.dry_run:
+            success_count += 1
+            print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
+            rows.append({"index": global_idx, "status": "DRY", "elapsed": 0.0, "prompt": prompt})
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "steer_mean": "",
+                "steer_max": "",
+                "eval_mean": "",
+                "eval_max": "",
+                "status": "DRY",
+            })
+            continue
+
+        start = time.time()
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        elapsed = time.time() - start
+
+        stdout_path = log_dir / f"{run_name}.stdout.log"
+        stderr_path = log_dir / f"{run_name}.stderr.log"
+        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+        reward_stats = _extract_reward_stats(proc.stdout or "")
+        if proc.returncode == 0:
+            success_count += 1
+            rows.append({"index": global_idx, "status": "OK", "elapsed": elapsed, "prompt": prompt})
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "steer_mean": reward_stats["steer_mean"],
+                "steer_max": reward_stats["steer_max"],
+                "eval_mean": reward_stats["eval_mean"],
+                "eval_max": reward_stats["eval_max"],
+                "status": "OK",
+            })
+            print(_c(f"  status: {_c('OK', _Style.GREEN, _Style.BOLD)}  time: {elapsed:.2f}s", _Style.DIM))
+        else:
+            rows.append({"index": global_idx, "status": "FAIL", "elapsed": elapsed, "prompt": prompt})
+            eval_rows.append({
+                "index": global_idx,
+                "prompt": prompt,
+                "steer_mean": reward_stats["steer_mean"],
+                "steer_max": reward_stats["steer_max"],
+                "eval_mean": reward_stats["eval_mean"],
+                "eval_max": reward_stats["eval_max"],
+                "status": "FAIL",
+            })
+            print(_c(f"  status: {_c('FAIL', _Style.RED, _Style.BOLD)}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
+            stderr_tail = (proc.stderr or "").splitlines()[-20:]
+            if stderr_tail:
+                print(_c("  stderr tail:", _Style.YELLOW, _Style.BOLD))
+                for line in stderr_tail:
+                    print("   ", line)
+            if args.stop_on_error:
+                raise RuntimeError(f"Stopping due to --stop-on-error on prompt index {global_idx}")
+
+        print()
+
+    return rows, eval_rows, success_count
 
 
 def _print_summary(rows: List[Dict[str, Any]]) -> None:
@@ -238,6 +332,12 @@ def parse_args() -> argparse.Namespace:
         choices=["none", "clip", "pick", "image_reward"],
     )
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument(
+        "--devices",
+        nargs="+",
+        default=None,
+        help="Optional list of GPU devices to shard prompts across, e.g. --devices cuda:0 cuda:1.",
+    )
 
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--num-steps", type=int, default=None)
@@ -329,6 +429,7 @@ def main() -> int:
         end_index = min(end_index, args.start_index + args.max_prompts)
 
     selected_prompts = prompts[args.start_index:end_index]
+    devices = args.devices if args.devices is not None else [args.device]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = args.log_dir or (args.output_dir / "_batch_logs")
@@ -340,6 +441,7 @@ def main() -> int:
     print(f"Runs        : {len(selected_prompts)} (from index {args.start_index})")
     print(f"Output root : {args.output_dir}")
     print(f"Log dir     : {log_dir}")
+    print(f"Devices     : {', '.join(devices)}")
     print()
 
     rows: List[Dict[str, Any]] = []
@@ -347,96 +449,32 @@ def main() -> int:
     success_count = 0
 
     batch_start = time.time()
-    total_runs = len(selected_prompts)
-    for local_idx, prompt in enumerate(selected_prompts, start=1):
-        global_idx = args.start_index + local_idx - 1
-        prompt_slug = _slugify(prompt)
-        run_name = f"run_{global_idx:04d}_{prompt_slug}"
-        run_output_dir = args.output_dir / run_name
+    shards = _split_prompts_across_devices(selected_prompts, devices)
+    shard_inputs = [
+        [(args.start_index + prompt_index, prompt) for prompt_index, prompt in shard]
+        for shard in shards
+        if shard
+    ]
 
-        cmd = _build_sd_cmd(args, prompt, run_output_dir)
+    if len(devices) == 1:
+        shard_rows, shard_eval_rows, shard_success = _run_prompt_shard(args, shard_inputs[0], devices[0], log_dir)
+        rows.extend(shard_rows)
+        eval_rows.extend(shard_eval_rows)
+        success_count += shard_success
+    else:
+        with ThreadPoolExecutor(max_workers=len(shard_inputs)) as executor:
+            futures = [
+                executor.submit(_run_prompt_shard, args, shard, devices[i], log_dir)
+                for i, shard in enumerate(shard_inputs)
+            ]
+            for future in as_completed(futures):
+                shard_rows, shard_eval_rows, shard_success = future.result()
+                rows.extend(shard_rows)
+                eval_rows.extend(shard_eval_rows)
+                success_count += shard_success
 
-        print(_c(f"[{local_idx:03d}/{total_runs:03d}]", _Style.BOLD), _truncate(prompt, 100))
-        print(_c("  output:", _Style.DIM), run_output_dir)
-
-        if args.dry_run:
-            success_count += 1
-            print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
-            rows.append({
-                "index": global_idx,
-                "status": "DRY",
-                "elapsed": 0.0,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": "",
-                "steer_max": "",
-                "eval_mean": "",
-                "eval_max": "",
-                "status": "DRY",
-            })
-            continue
-
-        start = time.time()
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        elapsed = time.time() - start
-
-        stdout_path = log_dir / f"{run_name}.stdout.log"
-        stderr_path = log_dir / f"{run_name}.stderr.log"
-        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
-
-        reward_stats = _extract_reward_stats(proc.stdout or "")
-        if proc.returncode == 0:
-            success_count += 1
-            status = _c("OK", _Style.GREEN, _Style.BOLD)
-            rows.append({
-                "index": global_idx,
-                "status": "OK",
-                "elapsed": elapsed,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": reward_stats["steer_mean"],
-                "steer_max": reward_stats["steer_max"],
-                "eval_mean": reward_stats["eval_mean"],
-                "eval_max": reward_stats["eval_max"],
-                "status": "OK",
-            })
-            print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
-        else:
-            status = _c("FAIL", _Style.RED, _Style.BOLD)
-            rows.append({
-                "index": global_idx,
-                "status": "FAIL",
-                "elapsed": elapsed,
-                "prompt": prompt,
-            })
-            eval_rows.append({
-                "index": global_idx,
-                "prompt": prompt,
-                "steer_mean": reward_stats["steer_mean"],
-                "steer_max": reward_stats["steer_max"],
-                "eval_mean": reward_stats["eval_mean"],
-                "eval_max": reward_stats["eval_max"],
-                "status": "FAIL",
-            })
-            print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
-            stderr_tail = (proc.stderr or "").splitlines()[-20:]
-            if stderr_tail:
-                print(_c("  stderr tail:", _Style.YELLOW, _Style.BOLD))
-                for line in stderr_tail:
-                    print("   ", line)
-
-            if args.stop_on_error:
-                print(_c("Stopping due to --stop-on-error", _Style.YELLOW, _Style.BOLD))
-                break
-
-        print()
+    rows.sort(key=lambda row: row["index"])
+    eval_rows.sort(key=lambda row: row["index"])
 
     total_elapsed = time.time() - batch_start
     _print_summary(rows)

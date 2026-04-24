@@ -34,7 +34,7 @@ python runs/gradient_sdxl_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
   --eval-reward image_reward \
-  --device cuda \
+  --devices cuda:0 cuda:1 \
   --num-steps 100 \
   --num-particles 4 \
   --batch-p 1 \
@@ -45,6 +45,8 @@ python runs/gradient_sdxl_batch.py \
   --save-intermediate-rewards --trace-eval-batch 1 \
   --output-dir logs/sdxl_batch
 ```
+
+For prompt-level parallelism, pass multiple GPUs with `--devices`. The batch runner will split the prompt list across those devices and run one worker process per GPU.
 
 Run one SD 1.5 prompt:
 
@@ -69,7 +71,7 @@ python runs/gradient_sd_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
   --eval-reward image_reward \
-  --device cuda \
+  --devices cuda:0 cuda:1 \
   --num-steps 100 \
   --num-particles 4 \
   --batch-p 1 \
