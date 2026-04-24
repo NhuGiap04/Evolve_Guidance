@@ -4,12 +4,12 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 import torch
+from huggingface_hub import hf_hub_download
 from transformers import CLIPProcessor
 
 
 _BPE_VOCAB_NAME = "bpe_simple_vocab_16e6.txt.gz"
 _BPE_VOCAB_URL = "https://openaipublic.azureedge.net/clip/bpe_simple_vocab_16e6.txt.gz"
-_HPSV2_CACHE_DIR = Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub" / "models--xswu--HPSv2"
 _HPSV2_CHECKPOINT_NAME = "HPS_v2_compressed.pt"
 
 
@@ -43,20 +43,18 @@ from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
 
 
 def find_hpsv2_checkpoint():
-    matches = sorted(_HPSV2_CACHE_DIR.glob(f"snapshots/*/{_HPSV2_CHECKPOINT_NAME}"))
-    if matches:
-        return matches[-1]
-
-    # Force hpsv2 to populate the Hugging Face cache, then search again.
-    hpsv2.score([], "")
-    matches = sorted(_HPSV2_CACHE_DIR.glob(f"snapshots/*/{_HPSV2_CHECKPOINT_NAME}"))
-    if matches:
-        return matches[-1]
-
-    raise FileNotFoundError(
-        f"Could not find {_HPSV2_CHECKPOINT_NAME} under {_HPSV2_CACHE_DIR}. "
-        "Run hpsv2.score([], '') with network access or download xswu/HPSv2 from Hugging Face."
-    )
+    try:
+        return Path(
+            hf_hub_download(
+                repo_id="xswu/HPSv2",
+                filename=_HPSV2_CHECKPOINT_NAME,
+            )
+        )
+    except Exception as exc:
+        raise FileNotFoundError(
+            f"Could not download {_HPSV2_CHECKPOINT_NAME} from Hugging Face repo xswu/HPSv2. "
+            "Run this once with network access, or pre-download that file into the Hugging Face cache."
+        ) from exc
 
 
 class HPSv2Scorer(torch.nn.Module):
