@@ -1,12 +1,10 @@
 import os
+import importlib.util
 from pathlib import Path
 from urllib.request import urlretrieve
 
 import torch
 from transformers import CLIPProcessor
-import hpsv2
-import hpsv2.src.open_clip as hps_open_clip
-from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
 
 
 _BPE_VOCAB_NAME = "bpe_simple_vocab_16e6.txt.gz"
@@ -14,7 +12,12 @@ _BPE_VOCAB_URL = "https://openaipublic.azureedge.net/clip/bpe_simple_vocab_16e6.
 
 
 def ensure_hpsv2_bpe_vocab():
-    open_clip_dir = Path(hps_open_clip.__file__).resolve().parent
+    hpsv2_spec = importlib.util.find_spec("hpsv2")
+    if hpsv2_spec is None or hpsv2_spec.origin is None:
+        raise ImportError("hpsv2 is not installed. Install hpsv2==1.2.0 first.")
+
+    hpsv2_dir = Path(hpsv2_spec.origin).resolve().parent
+    open_clip_dir = hpsv2_dir / "src" / "open_clip"
     vocab_path = open_clip_dir / _BPE_VOCAB_NAME
     if vocab_path.exists():
         return vocab_path
@@ -29,6 +32,12 @@ def ensure_hpsv2_bpe_vocab():
         ) from exc
 
     return vocab_path
+
+
+ensure_hpsv2_bpe_vocab()
+
+import hpsv2
+from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
 
 
 class HPSv2Scorer(torch.nn.Module):
@@ -60,7 +69,6 @@ class HPSv2Scorer(torch.nn.Module):
         )
 
         checkpoint_path = f"{os.path.expanduser('~')}/.cache/huggingface/hub/models--xswu--HPSv2/snapshots/697403c78157020a1ae59d23f111aa58ced35b0a/HPS_v2_compressed.pt"
-        ensure_hpsv2_bpe_vocab()
         # force download of model via score
         hpsv2.score([], "")
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
