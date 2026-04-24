@@ -8,7 +8,7 @@ set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
 PROMPTS_FILE="${PROMPTS_FILE:-prompts/hps_v2_all_eval.txt}"
-OUTPUT_DIR="${OUTPUT_DIR:-logs/sd_batch}"
+OUTPUT_ROOT_DIR="${OUTPUT_DIR:-logs/sd_batch}"
 CONFIG="${CONFIG:-pick}"
 EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 DEVICE="${DEVICE:-cuda:1}"
@@ -23,18 +23,23 @@ STEIN_LOOP="${STEIN_LOOP:-1}"
 STEER_START="${STEER_START:-0}"
 STEER_END="${STEER_END:-20}"
 
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_ROOT_DIR"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$OUTPUT_DIR/batch_${TIMESTAMP}.log"
+RUN_DIR_NAME="${RUN_DIR_NAME:-batch_${TIMESTAMP}_$$}"
+RUN_OUTPUT_DIR="$OUTPUT_ROOT_DIR/$RUN_DIR_NAME"
+mkdir -p "$RUN_OUTPUT_DIR"
+LOG_FILE="$RUN_OUTPUT_DIR/batch.log"
 
 echo "[INFO] Starting batch run"
+echo "[INFO] Output root: $OUTPUT_ROOT_DIR"
+echo "[INFO] Run output: $RUN_OUTPUT_DIR"
 echo "[INFO] Log file: $LOG_FILE"
 
 echo "[INFO] Command:"
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN runs/gradient_sd_batch.py --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose"
+  echo "  $PYTHON_BIN runs/gradient_sd_batch.py --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose"
 else
-  echo "  $PYTHON_BIN runs/gradient_sd_batch.py --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose"
+  echo "  $PYTHON_BIN runs/gradient_sd_batch.py --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose"
 fi
 
 device_args=(--device "$DEVICE")
@@ -48,7 +53,7 @@ fi
   --prompts-file "$PROMPTS_FILE" \
   --config "$CONFIG" \
   --negative-prompt "$NEGATIVE_PROMPT" \
-  --output-dir "$OUTPUT_DIR" \
+  --output-dir "$RUN_OUTPUT_DIR" \
   --eval-reward "$EVAL_REWARD" \
   "${device_args[@]}" \
   --num-steps "$NUM_STEPS" \
