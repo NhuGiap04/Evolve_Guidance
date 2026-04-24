@@ -1,0 +1,30 @@
+{
+  "prompt": "The black motorcycle is parked on the sidewalk.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 73.23373651504517,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.22412109375,
+    0.2264404296875,
+    0.226318359375,
+    0.2330322265625
+  ],
+  "steer_reward_stats": {
+    "mean": 0.22747802734375,
+    "max": 0.2330322265625,
+    "min": 0.22412109375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.3603515625,
+    1.4541015625,
+    1.46484375,
+    0.93115234375
+  ],
+  "eval_reward_stats": {
+    "mean": 0.8724365234375,
+    "max": 1.46484375,
+    "min": -0.3603515625
+  }
+}

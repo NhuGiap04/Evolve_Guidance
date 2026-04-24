@@ -1,0 +1,30 @@
+{
+  "prompt": "there is a bathroom that has a lot of things on the floor",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.20799136161804,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2244873046875,
+    0.2188720703125,
+    0.2281494140625,
+    0.2225341796875
+  ],
+  "steer_reward_stats": {
+    "mean": 0.2235107421875,
+    "max": 0.2281494140625,
+    "min": 0.2188720703125
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -1.099609375,
+    -0.72119140625,
+    0.98095703125,
+    -0.68408203125
+  ],
+  "eval_reward_stats": {
+    "mean": -0.3809814453125,
+    "max": 0.98095703125,
+    "min": -1.099609375
+  }
+}

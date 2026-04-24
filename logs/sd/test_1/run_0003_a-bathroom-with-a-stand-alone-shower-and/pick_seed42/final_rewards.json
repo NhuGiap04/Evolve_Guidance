@@ -1,0 +1,30 @@
+{
+  "prompt": "A bathroom with a stand alone shower and a peep window.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 71.91338920593262,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.208740234375,
+    0.2071533203125,
+    0.2025146484375,
+    0.206298828125
+  ],
+  "steer_reward_stats": {
+    "mean": 0.2061767578125,
+    "max": 0.208740234375,
+    "min": 0.2025146484375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.62109375,
+    -0.9853515625,
+    -0.30517578125,
+    -0.05975341796875
+  ],
+  "eval_reward_stats": {
+    "mean": -0.4928436279296875,
+    "max": -0.05975341796875,
+    "min": -0.9853515625
+  }
+}

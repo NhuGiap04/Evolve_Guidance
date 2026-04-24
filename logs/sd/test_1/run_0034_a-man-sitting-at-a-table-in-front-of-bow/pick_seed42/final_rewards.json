@@ -1,0 +1,30 @@
+{
+  "prompt": "A man sitting at a table in front of bowls of spices.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.00904512405396,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.221923828125,
+    0.210205078125,
+    0.2169189453125,
+    0.2025146484375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.212890625,
+    "max": 0.221923828125,
+    "min": 0.2025146484375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    1.9443359375,
+    1.197265625,
+    2.109375,
+    0.319580078125
+  ],
+  "eval_reward_stats": {
+    "mean": 1.39263916015625,
+    "max": 2.109375,
+    "min": 0.319580078125
+  }
+}

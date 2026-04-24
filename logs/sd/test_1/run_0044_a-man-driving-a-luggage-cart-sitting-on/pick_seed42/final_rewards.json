@@ -1,0 +1,30 @@
+{
+  "prompt": "A man driving a luggage cart sitting on top of a runway.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.50257992744446,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2196044921875,
+    0.2174072265625,
+    0.2174072265625,
+    0.22509765625
+  ],
+  "steer_reward_stats": {
+    "mean": 0.219879150390625,
+    "max": 0.22509765625,
+    "min": 0.2174072265625
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.317626953125,
+    -0.062255859375,
+    0.68603515625,
+    1.7197265625
+  ],
+  "eval_reward_stats": {
+    "mean": 0.5064697265625,
+    "max": 1.7197265625,
+    "min": -0.317626953125
+  }
+}

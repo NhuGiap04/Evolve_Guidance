@@ -1,0 +1,30 @@
+{
+  "prompt": "Several vehicles with pieces of luggage on them with planes off to the side.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 71.67483425140381,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2061767578125,
+    0.2110595703125,
+    0.2138671875,
+    0.2122802734375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.210845947265625,
+    "max": 0.2138671875,
+    "min": 0.2061767578125
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.5361328125,
+    0.14404296875,
+    0.467529296875,
+    -0.77783203125
+  ],
+  "eval_reward_stats": {
+    "mean": -0.17559814453125,
+    "max": 0.467529296875,
+    "min": -0.77783203125
+  }
+}

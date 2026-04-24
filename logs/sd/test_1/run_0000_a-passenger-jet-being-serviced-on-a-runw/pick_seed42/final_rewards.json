@@ -1,0 +1,30 @@
+{
+  "prompt": "A passenger jet being serviced on a runway in an airport.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 71.6943588256836,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2010498046875,
+    0.2041015625,
+    0.2025146484375,
+    0.2052001953125
+  ],
+  "steer_reward_stats": {
+    "mean": 0.203216552734375,
+    "max": 0.2052001953125,
+    "min": 0.2010498046875
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    0.320068359375,
+    1.1669921875,
+    1.0283203125,
+    0.9599609375
+  ],
+  "eval_reward_stats": {
+    "mean": 0.86883544921875,
+    "max": 1.1669921875,
+    "min": 0.320068359375
+  }
+}

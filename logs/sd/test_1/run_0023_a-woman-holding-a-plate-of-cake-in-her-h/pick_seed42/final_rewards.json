@@ -1,0 +1,30 @@
+{
+  "prompt": "a woman holding a plate of cake in her hand",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 71.93412494659424,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2308349609375,
+    0.2203369140625,
+    0.2293701171875,
+    0.232177734375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.228179931640625,
+    "max": 0.232177734375,
+    "min": 0.2203369140625
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    1.7158203125,
+    1.4638671875,
+    1.3037109375,
+    0.96044921875
+  ],
+  "eval_reward_stats": {
+    "mean": 1.3609619140625,
+    "max": 1.7158203125,
+    "min": 0.96044921875
+  }
+}

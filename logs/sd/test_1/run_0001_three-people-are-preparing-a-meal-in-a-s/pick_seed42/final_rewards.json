@@ -1,0 +1,30 @@
+{
+  "prompt": "Three people are preparing a meal in a small kitchen.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.72680377960205,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2208251953125,
+    0.23779296875,
+    0.22021484375,
+    0.232421875
+  ],
+  "steer_reward_stats": {
+    "mean": 0.227813720703125,
+    "max": 0.23779296875,
+    "min": 0.22021484375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    0.67626953125,
+    1.169921875,
+    -0.07513427734375,
+    0.52783203125
+  ],
+  "eval_reward_stats": {
+    "mean": 0.5747222900390625,
+    "max": 1.169921875,
+    "min": -0.07513427734375
+  }
+}

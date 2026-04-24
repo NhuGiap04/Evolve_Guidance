@@ -13,7 +13,7 @@ def seg():
 
     # Stein transport guidance parameters.
     config.sample.num_particles = 4
-    config.sample.batch_p = 1
+    config.sample.batch_p = None
     config.sample.stein_step = 0.02
     config.sample.stein_loop = 2
     config.sample.stein_kernel = "rbf"

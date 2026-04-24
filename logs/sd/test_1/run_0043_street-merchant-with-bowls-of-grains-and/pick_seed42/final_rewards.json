@@ -1,0 +1,30 @@
+{
+  "prompt": "Street merchant with bowls of grains and other products.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.61467981338501,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.22705078125,
+    0.2205810546875,
+    0.2265625,
+    0.2249755859375
+  ],
+  "steer_reward_stats": {
+    "mean": 0.22479248046875,
+    "max": 0.22705078125,
+    "min": 0.2205810546875
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    1.9951171875,
+    1.90625,
+    2.044921875,
+    1.771484375
+  ],
+  "eval_reward_stats": {
+    "mean": 1.929443359375,
+    "max": 2.044921875,
+    "min": 1.771484375
+  }
+}

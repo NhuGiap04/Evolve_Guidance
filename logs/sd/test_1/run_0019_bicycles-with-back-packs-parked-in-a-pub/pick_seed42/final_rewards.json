@@ -1,0 +1,30 @@
+{
+  "prompt": "Bicycles with back packs parked in a public place.",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.4697425365448,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.2188720703125,
+    0.2281494140625,
+    0.2249755859375,
+    0.2286376953125
+  ],
+  "steer_reward_stats": {
+    "mean": 0.22515869140625,
+    "max": 0.2286376953125,
+    "min": 0.2188720703125
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.28369140625,
+    0.115966796875,
+    -0.317138671875,
+    -0.400634765625
+  ],
+  "eval_reward_stats": {
+    "mean": -0.22137451171875,
+    "max": 0.115966796875,
+    "min": -0.400634765625
+  }
+}

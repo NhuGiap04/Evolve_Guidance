@@ -1,0 +1,30 @@
+{
+  "prompt": "a wooden skate with a toy elephant inside of it",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 72.5935435295105,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.230224609375,
+    0.2347412109375,
+    0.243408203125,
+    0.23291015625
+  ],
+  "steer_reward_stats": {
+    "mean": 0.235321044921875,
+    "max": 0.243408203125,
+    "min": 0.230224609375
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.40234375,
+    -0.11053466796875,
+    1.072265625,
+    0.74755859375
+  ],
+  "eval_reward_stats": {
+    "mean": 0.3267364501953125,
+    "max": 1.072265625,
+    "min": -0.40234375
+  }
+}

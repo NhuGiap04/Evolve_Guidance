@@ -1,0 +1,30 @@
+{
+  "prompt": "there is a red bus that has a mans face on it",
+  "config": "pick",
+  "num_images": 4,
+  "inference_time_sec": 73.13902878761292,
+  "steer_reward_name": "pick",
+  "steer_rewards": [
+    0.208740234375,
+    0.2066650390625,
+    0.215576171875,
+    0.212158203125
+  ],
+  "steer_reward_stats": {
+    "mean": 0.210784912109375,
+    "max": 0.215576171875,
+    "min": 0.2066650390625
+  },
+  "eval_reward_name": "image_reward",
+  "eval_rewards": [
+    -0.5322265625,
+    -1.103515625,
+    -0.59521484375,
+    -0.07867431640625
+  ],
+  "eval_reward_stats": {
+    "mean": -0.5774078369140625,
+    "max": -0.07867431640625,
+    "min": -1.103515625
+  }
+}
