@@ -701,7 +701,10 @@ def pipeline_using_gradient_sd(
             sigma_t = eta * torch.sqrt(torch.clamp(variance_t, min=0.0))
             pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t ** 2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
-            pred_x0, _, _ = _predict_x0(latents, t_int, noise_pred)
+
+            # Pred x0|t = x0(steered_xt)
+            steered_noise_pred = _predict_noise(latents, t)
+            pred_x0, _, _ = _predict_x0(latents, t_int, steered_noise_pred)
             if is_steered_step:
                 post_stein_pred_x0 = pred_x0.detach().clone()
 
