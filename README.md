@@ -27,6 +27,9 @@ python runs/single/gradient_sdxl.py \
   --output-dir logs/sdxl
 ```
 
+By default, post-generation evaluation is deferred. The run saves images and `final_rewards.json` metadata for later evaluation.
+Use `--run-eval-now` if you want immediate final/trace scoring in the same run.
+
 Run SDXL batch prompts:
 
 ```bash

@@ -51,7 +51,12 @@ def parse_args():
         type=str,
         default="image_reward",
         choices=["none", "clip", "pick", "image_reward"],
-        help="Optional second reward model for deferred trace/final evaluation.",
+        help="Optional second reward model used when --run-eval-now is enabled.",
+    )
+    parser.add_argument(
+        "--run-eval-now",
+        action="store_true",
+        help="Run final/trace reward evaluation immediately. By default, evaluation is deferred.",
     )
     parser.add_argument(
         "--device",
@@ -350,7 +355,7 @@ def main():
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     eval_scorer = None
-    if args.eval_reward != "none":
+    if args.run_eval_now and args.eval_reward != "none":
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
 
     out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
@@ -453,25 +458,35 @@ def main():
     if len(final_prompts) != final_images.shape[0]:
         final_prompts = [args.prompt] * final_images.shape[0]
 
-    # 2) Evaluate final rewards and persist JSON before any deferred trace eval.
-    with torch.no_grad():
-        final_steer_scores = steer_scorer(final_images, final_prompts).detach().float().cpu()
-        final_eval_scores = None
-        if eval_scorer is not None:
-            final_eval_scores = eval_scorer(final_images, final_prompts).detach().float().cpu()
+    # 2) Persist generation outputs now and optionally evaluate in-process.
+    final_steer_scores = None
+    final_eval_scores = None
+    if args.run_eval_now:
+        with torch.no_grad():
+            final_steer_scores = steer_scorer(final_images, final_prompts).detach().float().cpu()
+            if eval_scorer is not None:
+                final_eval_scores = eval_scorer(final_images, final_prompts).detach().float().cpu()
+
+    image_files = [f"sample_{idx:02d}.png" for idx in range(final_images.shape[0])]
 
     final_rewards_payload = {
         "prompt": args.prompt,
         "config": args.config,
         "num_images": int(final_images.shape[0]),
         "inference_time_sec": float(inference_elapsed),
+        "image_files": image_files,
+        "evaluation_deferred": not args.run_eval_now,
         "steer_reward_name": config.reward_fn,
-        "steer_rewards": [float(v) for v in final_steer_scores.tolist()],
-        "steer_reward_stats": {
-            "mean": float(final_steer_scores.mean().item()),
-            "max": float(final_steer_scores.max().item()),
-            "min": float(final_steer_scores.min().item()),
-        },
+        "steer_rewards": [float(v) for v in final_steer_scores.tolist()] if final_steer_scores is not None else None,
+        "steer_reward_stats": (
+            {
+                "mean": float(final_steer_scores.mean().item()),
+                "max": float(final_steer_scores.max().item()),
+                "min": float(final_steer_scores.min().item()),
+            }
+            if final_steer_scores is not None
+            else None
+        ),
     }
 
     if final_eval_scores is not None:
@@ -491,7 +506,12 @@ def main():
     with final_rewards_path.open("w", encoding="utf-8") as f:
         json.dump(final_rewards_payload, f, indent=2)
 
-    if args.save_intermediate_rewards:
+    if args.save_intermediate_rewards and not args.run_eval_now and len(trace_entries) > 0:
+        deferred_trace_path = out_dir / "steer_trace_latents.pt"
+        torch.save(trace_entries, deferred_trace_path)
+        print(f"Saved deferred trace latents to: {deferred_trace_path}")
+
+    if args.save_intermediate_rewards and args.run_eval_now:
         # 3) Deferred intermediate reward evaluation in trace-eval micro-batches.
         trace_rows = []
         pre_steer_mean = []
@@ -649,10 +669,13 @@ def main():
 
     print("Saved outputs to:", out_dir)
     print(f"Inference time (pipeline only): {inference_elapsed:.4f}s")
-    print(
-        "Final steering reward stats: "
-        f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"
-    )
+    if final_steer_scores is not None:
+        print(
+            "Final steering reward stats: "
+            f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"
+        )
+    else:
+        print("Post-generation evaluation deferred. Run a separate evaluator on saved outputs.")
 
 
 if __name__ == "__main__":
