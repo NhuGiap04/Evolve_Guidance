@@ -211,6 +211,7 @@ __marimo__/
 
 # Jupyter
 *.ipynb
+!notebooks/eval_generated_outputs.ipynb
 
 references/
 logs/*
