@@ -74,6 +74,11 @@ def parse_args():
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
+        "--monitor-stein-delta",
+        action="store_true",
+        help="Print relative and absolute latent changes caused by each steered Stein step.",
+    )
+    parser.add_argument(
         "--steer-start",
         type=int,
         default=None,
@@ -317,6 +322,8 @@ def main():
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
         config.sample.kl_coeff = args.kl_coeff
+    if args.monitor_stein_delta:
+        config.sample.monitor_stein_delta = True
     if args.steer_start is not None:
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
@@ -424,6 +431,7 @@ def main():
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         intermediate_rewards=False,
+        monitor_stein_delta=config.sample.monitor_stein_delta,
         return_all_particles=True,
         return_dict=False,
     )

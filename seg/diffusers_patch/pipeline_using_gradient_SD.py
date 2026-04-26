@@ -196,6 +196,7 @@ def pipeline_using_gradient_sd(
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
     intermediate_rewards: bool = False,
+    monitor_stein_delta: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionPipelineOutput, Tuple]:
     """Run SD denoising with optional Stein particle transport guidance."""
@@ -601,8 +602,12 @@ def pipeline_using_gradient_sd(
             post_stein_pred_x0 = None
 
             if is_steered_step:
+                latents_before_stein = None
+                if monitor_stein_delta or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
+                    latents_before_stein = latents.detach().clone()
+
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
-                    pre_stein_latents = latents.detach().clone()
+                    pre_stein_latents = latents_before_stein
 
                 should_log_rewards = intermediate_rewards
                 pre_reward = None
@@ -647,6 +652,18 @@ def pipeline_using_gradient_sd(
                         adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
 
                     latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
+
+                if monitor_stein_delta and latents_before_stein is not None:
+                    delta = (latents - latents_before_stein).flatten(1).norm(dim=1)
+                    base = latents_before_stein.flatten(1).norm(dim=1)
+                    rel_delta = (delta / (base + 1e-8)).mean()
+
+                    print(
+                        "i=", i,
+                        "t=", t_int,
+                        "rel_delta=", rel_delta.item(),
+                        "abs_delta=", delta.mean().item(),
+                    )
 
                 if should_log_rewards:
                     if pre_reward is None:

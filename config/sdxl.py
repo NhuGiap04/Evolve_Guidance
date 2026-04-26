@@ -23,6 +23,7 @@ def seg():
     config.sample.steer_start = None
     config.sample.steer_end = None
     config.sample.intermediate_rewards = True
+    config.sample.monitor_stein_delta = False
 
     config.pretrained.model = "stabilityai/stable-diffusion-xl-base-1.0"
 
