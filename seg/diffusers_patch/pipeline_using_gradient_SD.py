@@ -425,12 +425,8 @@ def pipeline_using_gradient_sd(
     steer_start_effective = max(0, min(total_inference_steps - 1, steer_start_effective))
     steer_end_effective = max(0, min(total_inference_steps - 1, steer_end_effective))
 
-    if steer_start_effective > steer_end_effective:
-        raise ValueError(
-            "steer_start must be <= steer_end when using inference-step indexing (0-based)."
-        )
-
-    use_stein = reward_fn is not None and stein_loop > 0 and stein_step > 0
+    has_steering_window = steer_start_effective <= steer_end_effective
+    use_stein = has_steering_window and reward_fn is not None and stein_loop > 0 and stein_step > 0
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
 
     intermediate_rewards_data: Dict[str, List[float]] = {
