@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import csv
 import matplotlib.pyplot as plt
+from matplotlib import get_backend
 from PIL import Image
 
 
@@ -158,7 +159,14 @@ def _extract_intermediate_reward_trace(stdout: str) -> Dict[str, List[float]]:
     return trace
 
 
-def _plot_reward_trace(prompt: str, trace: Dict[str, List[float]], run_name: str, device: str) -> None:
+def _plot_reward_trace(
+    prompt: str,
+    trace: Dict[str, List[float]],
+    run_name: str,
+    device: str,
+    out_path: Path,
+    block: bool,
+) -> None:
     if not trace["timestep"]:
         return
 
@@ -184,11 +192,21 @@ def _plot_reward_trace(prompt: str, trace: Dict[str, List[float]], run_name: str
         axes[1].legend()
 
         plt.tight_layout()
-        plt.show(block=False)
-        plt.pause(0.001)
+        fig.savefig(out_path, dpi=160)
+        plt.show(block=block)
+        if not block:
+            plt.pause(0.001)
+        plt.close(fig)
 
 
-def _plot_particle_images(run_output_dir: Path, prompt: str, run_name: str, device: str) -> None:
+def _plot_particle_images(
+    run_output_dir: Path,
+    prompt: str,
+    run_name: str,
+    device: str,
+    out_path: Path,
+    block: bool,
+) -> None:
     image_paths = sorted(run_output_dir.glob("sample_*.png"))
     if not image_paths:
         return
@@ -211,8 +229,11 @@ def _plot_particle_images(run_output_dir: Path, prompt: str, run_name: str, devi
             ax.axis("off")
 
         plt.tight_layout()
-        plt.show(block=False)
-        plt.pause(0.001)
+        fig.savefig(out_path, dpi=160)
+        plt.show(block=block)
+        if not block:
+            plt.pause(0.001)
+        plt.close(fig)
 
 
 def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, device: str) -> List[str]:
@@ -340,11 +361,29 @@ def _run_prompt_shard(
             })
             print(_c(f"  status: {_c('OK', _Style.GREEN, _Style.BOLD)}  time: {elapsed:.2f}s", _Style.DIM))
             if args.plot_after_run:
+                reward_plot_path = run_output_dir / "reward_trace_before_after.png"
+                particle_plot_path = run_output_dir / "particles_grid.png"
                 if trace_data["timestep"]:
-                    _plot_reward_trace(prompt=prompt, trace=trace_data, run_name=run_name, device=device)
+                    _plot_reward_trace(
+                        prompt=prompt,
+                        trace=trace_data,
+                        run_name=run_name,
+                        device=device,
+                        out_path=reward_plot_path,
+                        block=args.plot_block,
+                    )
+                    print(_c(f"  saved: {reward_plot_path}", _Style.DIM))
                 else:
                     print(_c("  plot: no intermediate reward trace found in stdout.", _Style.YELLOW, _Style.BOLD))
-                _plot_particle_images(run_output_dir=run_output_dir, prompt=prompt, run_name=run_name, device=device)
+                _plot_particle_images(
+                    run_output_dir=run_output_dir,
+                    prompt=prompt,
+                    run_name=run_name,
+                    device=device,
+                    out_path=particle_plot_path,
+                    block=args.plot_block,
+                )
+                print(_c(f"  saved: {particle_plot_path}", _Style.DIM))
         else:
             rows.append({"index": global_idx, "status": "FAIL", "elapsed": elapsed, "prompt": prompt})
             eval_rows.append({
@@ -477,6 +516,18 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable per-run reward plotting.",
     )
+    parser.add_argument(
+        "--plot-block",
+        action="store_true",
+        default=True,
+        help="Block after each plot window so you can inspect each prompt before continuing.",
+    )
+    parser.add_argument(
+        "--no-plot-block",
+        dest="plot_block",
+        action="store_false",
+        help="Show plots in non-blocking mode.",
+    )
     parser.add_argument("--trace-decode-batch-size", type=int, default=None)
     parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
@@ -575,6 +626,12 @@ def main() -> int:
     print(f"Output root : {args.output_dir}")
     print(f"Log dir     : {log_dir}")
     print(f"Devices     : {', '.join(devices)}")
+    if args.plot_after_run:
+        backend = str(get_backend()).lower()
+        print(f"Plot backend: {backend}")
+        if "agg" in backend:
+            print(_c("Warning: current matplotlib backend is non-interactive; no plot window will appear.", _Style.YELLOW, _Style.BOLD))
+            print(_c("         Use a GUI backend (TkAgg/QtAgg) or run in an environment with display support.", _Style.YELLOW))
     if args.plot_after_run and args.save_intermediate_rewards:
         print(_c("Note: --plot-after-run active, so deferred trace saving is disabled (no .pt trace file).", _Style.YELLOW))
     print()
