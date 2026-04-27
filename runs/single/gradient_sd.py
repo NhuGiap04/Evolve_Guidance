@@ -102,6 +102,11 @@ def parse_args():
         help="Evaluate and save deferred intermediate steer/eval rewards (CSV + plots).",
     )
     parser.add_argument(
+        "--show-intermediate-rewards",
+        action="store_true",
+        help="Print per-step pre/post steering rewards during inference without saving trace files.",
+    )
+    parser.add_argument(
         "--trace-decode-batch-size",
         type=int,
         default=1,
@@ -427,7 +432,7 @@ def main():
         kl_coeff=config.sample.kl_coeff,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
-        intermediate_rewards=args.save_intermediate_rewards,
+        intermediate_rewards=(args.save_intermediate_rewards or args.show_intermediate_rewards),
         return_all_particles=True,
         return_dict=False,
     )

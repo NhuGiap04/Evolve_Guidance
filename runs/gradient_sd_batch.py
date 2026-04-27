@@ -7,12 +7,17 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import csv
+import matplotlib.pyplot as plt
+
+
+PLOT_LOCK = threading.Lock()
 
 
 def _supports_color() -> bool:
@@ -131,6 +136,62 @@ def _tail_lines(text: str, count: int) -> List[str]:
     return text.splitlines()[-count:]
 
 
+def _extract_intermediate_reward_trace(stdout: str) -> Dict[str, List[float]]:
+    pattern = re.compile(
+        r"^\[t=(\d+)\]\s+pre_mean=([\-0-9.eE]+)\s+pre_max=([\-0-9.eE]+)\s+"
+        r"post_mean=([\-0-9.eE]+)\s+post_max=([\-0-9.eE]+)$"
+    )
+    trace = {
+        "timestep": [],
+        "pre_mean": [],
+        "post_mean": [],
+        "pre_max": [],
+        "post_max": [],
+    }
+
+    for line in stdout.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        trace["timestep"].append(float(match.group(1)))
+        trace["pre_mean"].append(float(match.group(2)))
+        trace["pre_max"].append(float(match.group(3)))
+        trace["post_mean"].append(float(match.group(4)))
+        trace["post_max"].append(float(match.group(5)))
+
+    return trace
+
+
+def _plot_reward_trace(prompt: str, trace: Dict[str, List[float]], run_name: str, device: str) -> None:
+    if not trace["timestep"]:
+        return
+
+    x = list(range(1, len(trace["timestep"]) + 1))
+    with PLOT_LOCK:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+        fig.suptitle(f"{run_name} | {device}\\n{_truncate(prompt, 120)}")
+
+        axes[0].plot(x, trace["pre_mean"], label="before_stein", linewidth=2)
+        axes[0].plot(x, trace["post_mean"], label="after_stein", linewidth=2)
+        axes[0].set_title("Reward Mean")
+        axes[0].set_xlabel("Steered step")
+        axes[0].set_ylabel("Reward")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend()
+
+        axes[1].plot(x, trace["pre_max"], label="before_stein", linewidth=2)
+        axes[1].plot(x, trace["post_max"], label="after_stein", linewidth=2)
+        axes[1].set_title("Reward Max")
+        axes[1].set_xlabel("Steered step")
+        axes[1].set_ylabel("Reward")
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend()
+
+        plt.tight_layout()
+        plt.show(block=False)
+        plt.pause(0.001)
+
+
 def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, device: str) -> List[str]:
     cmd = [
         args.python,
@@ -171,6 +232,8 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, d
         _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
     if args.save_intermediate_rewards:
         cmd.append("--save-intermediate-rewards")
+    if args.plot_after_run:
+        cmd.append("--show-intermediate-rewards")
     _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
 
     return cmd
@@ -258,6 +321,7 @@ def _run_prompt_shard(
                     print("   ", line)
 
         reward_stats = _extract_reward_stats(proc.stdout or "")
+        trace_data = _extract_intermediate_reward_trace(proc.stdout or "")
         if proc.returncode == 0:
             success_count += 1
             rows.append({"index": global_idx, "status": "OK", "elapsed": elapsed, "prompt": prompt})
@@ -271,6 +335,11 @@ def _run_prompt_shard(
                 "status": "OK",
             })
             print(_c(f"  status: {_c('OK', _Style.GREEN, _Style.BOLD)}  time: {elapsed:.2f}s", _Style.DIM))
+            if args.plot_after_run:
+                if trace_data["timestep"]:
+                    _plot_reward_trace(prompt=prompt, trace=trace_data, run_name=run_name, device=device)
+                else:
+                    print(_c("  plot: no intermediate reward trace found in stdout.", _Style.YELLOW, _Style.BOLD))
         else:
             rows.append({"index": global_idx, "status": "FAIL", "elapsed": elapsed, "prompt": prompt})
             eval_rows.append({
@@ -390,6 +459,18 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--save-intermediate-images", action="store_true")
     parser.add_argument("--save-intermediate-rewards", action="store_true")
+    parser.add_argument(
+        "--plot-after-run",
+        action="store_true",
+        default=True,
+        help="Display a before/after Stein reward plot after each completed run.",
+    )
+    parser.add_argument(
+        "--no-plot-after-run",
+        dest="plot_after_run",
+        action="store_false",
+        help="Disable per-run reward plotting.",
+    )
     parser.add_argument("--trace-decode-batch-size", type=int, default=None)
     parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
