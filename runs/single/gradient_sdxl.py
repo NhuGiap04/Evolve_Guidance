@@ -428,7 +428,7 @@ def main():
         kl_coeff=config.sample.kl_coeff,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
-        intermediate_rewards=False,
+        intermediate_rewards=args.save_intermediate_rewards,
         return_all_particles=True,
         return_dict=False,
     )
