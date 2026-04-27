@@ -692,12 +692,19 @@ def pipeline_using_gradient_sdxl(
                     delta = (latents - latents_before_stein).flatten(1).norm(dim=1)
                     base = latents_before_stein.flatten(1).norm(dim=1)
                     rel_delta = (delta / (base + 1e-8)).mean()
+                    before_flat = latents_before_stein.flatten(1).float()
+                    after_flat = latents.flatten(1).float()
+                    cosine_sim = (
+                        (before_flat * after_flat).sum(dim=1)
+                        / (before_flat.norm(dim=1) * after_flat.norm(dim=1) + 1e-8)
+                    ).mean()
 
                     print(
                         "i=", i,
                         "t=", t_int,
                         "rel_delta=", rel_delta.item(),
                         "abs_delta=", delta.mean().item(),
+                        "cosine_sim=", cosine_sim.item(),
                     )
 
                 if should_log_rewards:
