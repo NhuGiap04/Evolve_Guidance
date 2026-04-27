@@ -2,6 +2,7 @@
 """Batch runner for runs/single/gradient_sd.py using prompts from .txt or .json."""
 
 import argparse
+import math
 import json
 import os
 import re
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import csv
 import matplotlib.pyplot as plt
+from PIL import Image
 
 
 PLOT_LOCK = threading.Lock()
@@ -192,6 +194,33 @@ def _plot_reward_trace(prompt: str, trace: Dict[str, List[float]], run_name: str
         plt.pause(0.001)
 
 
+def _plot_particle_images(run_output_dir: Path, prompt: str, run_name: str, device: str) -> None:
+    image_paths = sorted(run_output_dir.glob("sample_*.png"))
+    if not image_paths:
+        return
+
+    cols = min(4, len(image_paths))
+    rows = math.ceil(len(image_paths) / cols)
+    with PLOT_LOCK:
+        fig, axes = plt.subplots(rows, cols, figsize=(3.5 * cols, 3.5 * rows))
+        fig.suptitle(f"Particles | {run_name} | {device}\\n{_truncate(prompt, 120)}")
+
+        if not isinstance(axes, (list, tuple)):
+            axes = [axes]
+        flat_axes = list(axes.ravel()) if hasattr(axes, "ravel") else list(axes)
+
+        for idx, ax in enumerate(flat_axes):
+            if idx < len(image_paths):
+                img = Image.open(image_paths[idx]).convert("RGB")
+                ax.imshow(img)
+                ax.set_title(image_paths[idx].name)
+            ax.axis("off")
+
+        plt.tight_layout()
+        plt.show(block=False)
+        plt.pause(0.001)
+
+
 def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, device: str) -> List[str]:
     cmd = [
         args.python,
@@ -230,7 +259,7 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, d
         cmd.append("--save-intermediate-images")
         _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
         _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
-    if args.save_intermediate_rewards:
+    if args.save_intermediate_rewards and not args.plot_after_run:
         cmd.append("--save-intermediate-rewards")
     if args.plot_after_run:
         cmd.append("--show-intermediate-rewards")
@@ -340,6 +369,7 @@ def _run_prompt_shard(
                     _plot_reward_trace(prompt=prompt, trace=trace_data, run_name=run_name, device=device)
                 else:
                     print(_c("  plot: no intermediate reward trace found in stdout.", _Style.YELLOW, _Style.BOLD))
+                _plot_particle_images(run_output_dir=run_output_dir, prompt=prompt, run_name=run_name, device=device)
         else:
             rows.append({"index": global_idx, "status": "FAIL", "elapsed": elapsed, "prompt": prompt})
             eval_rows.append({
@@ -593,6 +623,8 @@ def main() -> int:
     print(f"Output root : {args.output_dir}")
     print(f"Log dir     : {log_dir}")
     print(f"Devices     : {', '.join(devices)}")
+    if args.plot_after_run and args.save_intermediate_rewards:
+        print(_c("Note: --plot-after-run active, so deferred trace saving is disabled (no .pt trace file).", _Style.YELLOW))
     print()
 
     rows: List[Dict[str, Any]] = []
