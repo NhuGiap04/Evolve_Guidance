@@ -24,6 +24,6 @@ setup(
         "fairscale==0.4.13",
         "clip",
         "lpips",
-        "wandb",
+        # "wandb",
     ]
 )
