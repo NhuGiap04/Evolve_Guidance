@@ -19,11 +19,10 @@ def seg():
     config.sample.stein_kernel = "rbf"
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
-    config.sample.kl_coeff = 1.0
+    config.sample.kl_coeff = 0.0001
     config.sample.steer_start = None
     config.sample.steer_end = None
-    config.sample.intermediate_rewards = True
-    config.sample.monitor_stein_delta = False
+    config.sample.monitor_status = False
 
     config.pretrained.model = "stabilityai/stable-diffusion-xl-base-1.0"
 

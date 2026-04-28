@@ -17,12 +17,11 @@ Run one SDXL prompt:
 python runs/single/gradient_sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
-  --eval-reward image_reward \
   --num-steps 100 \
   --num-particles 4 \
   --stein-loop 1 \
   --stein-step 0.005 \
-  --monitor-stein-delta \
+  --monitor-status \
   --steer-start 0 \
   --steer-end 20 \
   --output-dir logs/sdxl
@@ -34,7 +33,6 @@ Run SDXL batch prompts:
 python runs/gradient_sdxl_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
-  --eval-reward image_reward \
   --device cuda \
   --num-steps 100 \
   --num-particles 4 \
@@ -43,7 +41,7 @@ python runs/gradient_sdxl_batch.py \
   --stein-step 0.005 \
   --steer-start 0 \
   --steer-end 20 \
-  --save-intermediate-rewards --trace-eval-batch 1 \
+  --verbose --trace-eval-batch 1 \
   --output-dir logs/sdxl_batch
 ```
 
@@ -53,12 +51,11 @@ Run one SD 1.5 prompt:
 python runs/single/gradient_sd.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
-  --eval-reward image_reward \
   --num-steps 100 \
   --num-particles 4 \
   --stein-loop 1 \
   --stein-step 0.005 \
-  --monitor-stein-delta \
+  --monitor-status \
   --steer-start 0 \
   --steer-end 20 \
   --output-dir logs/sd
@@ -70,7 +67,6 @@ Run SD 1.5 batch prompts:
 python runs/gradient_sd_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
-  --eval-reward image_reward \
   --device cuda \
   --num-steps 100 \
   --num-particles 4 \
@@ -79,7 +75,7 @@ python runs/gradient_sd_batch.py \
   --stein-step 0.005 \
   --steer-start 0 \
   --steer-end 20 \
-  --save-intermediate-rewards --trace-eval-batch 1 \
+  --verbose --trace-eval-batch 1 \
   --output-dir logs/sd_batch
 ```
 
@@ -88,15 +84,14 @@ Useful flags:
 - `--start-index 100 --max-prompts 50`: run a slice of prompts.
 - `--stop-on-error`: stop on first failed prompt.
 - `--dry-run`: print commands without running them.
-- `--monitor-stein-delta`: print per-step latent steering stats (`rel_delta`, `abs_delta`, `cosine_sim`).
-- `--save-intermediate-images --trace-decode-batch-size 1`: save step images for each prompt.
-- `--save-intermediate-rewards --trace-eval-batch 1`: save deferred intermediate reward traces.
+- `--monitor-status`: print per-step latent steering stats (`rel_delta`, `abs_delta`, `steered_cosine_sim`, `score_pt_norm`, `target_score_norm`, `reward_grad_norm`).
+- `--verbose --trace-eval-batch 1`: save deferred intermediate reward traces and control intermediate-image decode batching.
 
 Batch outputs:
 
 - One run directory per prompt under `--output-dir`.
 - Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
-- Batch summary CSV in `<output-dir>/batch_eval_summary.csv`.
+- Batch summary CSV in `<output-dir>/batch_eval_summary.csv` with steering stats plus final stats for `clip`, `pick`, `image_reward`, `aesthetic`, and `hpsv2`.
 
 SD default checkpoint:
 
@@ -121,7 +116,7 @@ SD default checkpoint:
 - `--stein-kernel`: Stein kernel (`rbf`)
 - `--stein-adagrad-eps`: AdaGrad epsilon for Stein step adaptation
 - `--kl-coeff`: reward scaling denominator
-- `--monitor-stein-delta`: print per-step latent delta diagnostics (`rel_delta`, `abs_delta`, `cosine_sim`)
+- `--monitor-status`: print per-step latent delta diagnostics (`rel_delta`, `abs_delta`, `steered_cosine_sim`, `score_pt_norm`, `target_score_norm`, `reward_grad_norm`)
 - `--steer-start`, `--steer-end`: steering window (0-based step index)
 
 ### Batch-only Options
@@ -133,8 +128,7 @@ SD default checkpoint:
 - `--stop-on-error`: stop on first failing run
 - `--dry-run`: print generated commands only
 - `--log-dir`: override batch log directory
-- `--trace-decode-batch-size`: decode micro-batch size for intermediate image saving
-- `--trace-eval-batch`: decode/eval micro-batch size for deferred reward traces
+- `--trace-eval-batch`: decode/eval micro-batch size for deferred reward traces and intermediate image saving
 - `--intermediate-max-samples`: max samples per step for intermediate image dumps
 
 ### Outputs
@@ -146,7 +140,6 @@ SD saved in `logs/sd/<config>_seed<seed>`.
 Each run directory contains:
 
 - Final particle images (`sample_*.png`)
-- Final reward summary (`final_rewards.json`)
-- Deferred reward traces (`steer_trace.csv`) when `--save-intermediate-rewards` is enabled
+- Final reward summary (`final_rewards.json`) including steering rewards and final-particle scores for `clip`, `pick`, `image_reward`, `aesthetic`, and `hpsv2`
+- Deferred reward traces (`steer_trace.csv`) when `--verbose` is enabled
 - Steer reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`) when enabled
-- Optional eval reward plots (`eval_before_after_mean.png`, `eval_before_after_max.png`) when enabled

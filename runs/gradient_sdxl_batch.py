@@ -2,6 +2,7 @@
 """Batch runner for runs/single/gradient_sdxl.py using prompts from .txt or .json."""
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -11,7 +12,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import csv
+
+FINAL_SCORERS = ("clip", "pick", "image_reward", "aesthetic", "hpsv2")
 
 
 def _supports_color() -> bool:
@@ -136,8 +138,6 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
         args.negative_prompt,
         "--output-dir",
         str(run_output_dir),
-        "--eval-reward",
-        args.eval_reward,
         "--device",
         args.device,
     ]
@@ -157,16 +157,13 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
-    if args.monitor_stein_delta:
-        cmd.append("--monitor-stein-delta")
+    if args.monitor_status:
+        cmd.append("--monitor-status")
 
-    if args.save_intermediate_images:
-        cmd.append("--save-intermediate-images")
-        _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
+    if args.verbose:
+        cmd.append("--verbose")
         _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
-    if args.save_intermediate_rewards:
-        cmd.append("--save-intermediate-rewards")
-    _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
+        _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
 
     return cmd
 
@@ -234,12 +231,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
     parser.add_argument("--negative-prompt", type=str, default="")
     parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_batch"))
-    parser.add_argument(
-        "--eval-reward",
-        type=str,
-        default="image_reward",
-        choices=["none", "clip", "pick", "image_reward"],
-    )
     parser.add_argument("--device", type=str, default="cuda")
 
     parser.add_argument("--seed", type=int, default=None)
@@ -255,13 +246,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
-    parser.add_argument("--monitor-stein-delta", action="store_true")
+    parser.add_argument("--monitor-status", action="store_true")
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
 
-    parser.add_argument("--save-intermediate-images", action="store_true")
-    parser.add_argument("--save-intermediate-rewards", action="store_true")
-    parser.add_argument("--trace-decode-batch-size", type=int, default=None)
+    parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
 
@@ -279,36 +268,198 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _extract_reward_stats(stdout: str) -> Dict[str, str]:
-    """Parse final steering/eval reward stats from gradient_sdxl.py stdout."""
-    # Looks for:
-    # - Final eval reward stats (...): mean=-0.330566 max=-0.330566
-    # - Final steering reward stats: mean=-0.330566 max=-0.330566
-    result = {
-        "steer_mean": "",
-        "steer_max": "",
-        "eval_mean": "",
-        "eval_max": "",
-    }
-    for line in stdout.splitlines():
-        if "Final eval reward stats" in line:
-            # Extract mean and max using regex
-            import re
-            m = re.search(r"mean=([\-0-9.eE]+) max=([\-0-9.eE]+)", line)
-            if m:
-                result["eval_mean"] = m.group(1)
-                result["eval_max"] = m.group(2)
-        elif "Final steering reward stats" in line:
-            import re
-            m = re.search(r"mean=([\-0-9.eE]+) max=([\-0-9.eE]+)", line)
-            if m:
-                result["steer_mean"] = m.group(1)
-                result["steer_max"] = m.group(2)
-    return result
+def _to_metric_str(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.6f}"
+    return ""
+
+
+def _blank_reward_stats() -> Dict[str, str]:
+    stats = {"steer_mean": "", "steer_max": ""}
+    for scorer_name in FINAL_SCORERS:
+        stats[f"{scorer_name}_mean"] = ""
+        stats[f"{scorer_name}_max"] = ""
+    return stats
+
+
+def _extract_reward_stats(run_output_dir: Path) -> Dict[str, str]:
+    stats = _blank_reward_stats()
+    final_rewards_path = run_output_dir / "final_rewards.json"
+    if not final_rewards_path.exists():
+        return stats
+
+    try:
+        payload = json.loads(final_rewards_path.read_text(encoding="utf-8"))
+    except Exception:
+        return stats
+
+    steer_stats = payload.get("steer_reward_stats", {})
+    stats["steer_mean"] = _to_metric_str(steer_stats.get("mean"))
+    stats["steer_max"] = _to_metric_str(steer_stats.get("max"))
+
+    scorer_payload = payload.get("final_particle_scores_by_scorer", {})
+    for scorer_name in FINAL_SCORERS:
+        scorer_stats = scorer_payload.get(scorer_name, {}).get("stats", {})
+        stats[f"{scorer_name}_mean"] = _to_metric_str(scorer_stats.get("mean"))
+        stats[f"{scorer_name}_max"] = _to_metric_str(scorer_stats.get("max"))
+
+    return stats
 
 
 def _fmt_reward_stat(value: str) -> str:
     return value if value else "NA"
+
+
+def _build_eval_row(
+    global_idx: int,
+    prompt: str,
+    status: str,
+    reward_stats: Dict[str, str],
+) -> Dict[str, str]:
+    row = {
+        "index": str(global_idx),
+        "prompt": prompt,
+        "status": status,
+        "steer_mean": reward_stats["steer_mean"],
+        "steer_max": reward_stats["steer_max"],
+    }
+    for scorer_name in FINAL_SCORERS:
+        row[f"{scorer_name}_mean"] = reward_stats[f"{scorer_name}_mean"]
+        row[f"{scorer_name}_max"] = reward_stats[f"{scorer_name}_max"]
+    return row
+
+
+def _reward_log_line(reward_stats: Dict[str, str]) -> str:
+    parts = [
+        f"steer_mean={_fmt_reward_stat(reward_stats['steer_mean'])}",
+        f"steer_max={_fmt_reward_stat(reward_stats['steer_max'])}",
+    ]
+    for scorer_name in FINAL_SCORERS:
+        parts.append(f"{scorer_name}_mean={_fmt_reward_stat(reward_stats[f'{scorer_name}_mean'])}")
+    return "  rewards: " + " ".join(parts)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
+    # Prefer the source-of-truth config module when available.
+    try:
+        from config.sdxl import get_config as get_sdxl_config  # type: ignore
+
+        config = get_sdxl_config(args.config)
+        if args.seed is not None:
+            config.seed = args.seed
+        if args.num_steps is not None:
+            config.sample.num_steps = args.num_steps
+        if args.batch_size is not None:
+            config.sample.batch_size = args.batch_size
+        if args.guidance_scale is not None:
+            config.sample.guidance_scale = args.guidance_scale
+        if args.eta is not None:
+            config.sample.eta = args.eta
+        if args.num_particles is not None:
+            config.sample.num_particles = args.num_particles
+        if args.batch_p is not None:
+            config.sample.batch_p = args.batch_p
+        if args.stein_step is not None:
+            config.sample.stein_step = args.stein_step
+        if args.stein_loop is not None:
+            config.sample.stein_loop = args.stein_loop
+        if args.stein_kernel is not None:
+            config.sample.stein_kernel = args.stein_kernel
+        if args.stein_adagrad_eps is not None:
+            config.sample.stein_adagrad_eps = args.stein_adagrad_eps
+        if args.kl_coeff is not None:
+            config.sample.kl_coeff = args.kl_coeff
+        if args.monitor_status:
+            config.sample.monitor_status = True
+        if args.steer_start is not None:
+            config.sample.steer_start = args.steer_start
+        if args.steer_end is not None:
+            config.sample.steer_end = args.steer_end
+
+        model = str(config.pretrained.model)
+        model_revision = str(getattr(config.pretrained, "revision", ""))
+        reward_fn = str(config.reward_fn)
+        seed = int(config.seed)
+        sample = _json_safe(config.sample.to_dict())
+    except Exception:
+        # Fallback for environments without config dependencies.
+        model = "stabilityai/stable-diffusion-xl-base-1.0"
+        model_revision = ""
+        reward_fn = {"pick": "pick", "clip": "clip", "seg": "clip"}.get(args.config, args.config)
+        seed = int(args.seed) if args.seed is not None else 42
+        sample = {
+            "num_steps": 100,
+            "eta": 1.0,
+            "guidance_scale": 5.0,
+            "batch_size": 1,
+            "num_particles": 4,
+            "batch_p": 1,
+            "stein_step": 0.02,
+            "stein_loop": 2,
+            "stein_kernel": "rbf",
+            "stein_adagrad_eps": 1e-8,
+            "stein_adagrad_clip": None,
+            "kl_coeff": 0.0001,
+            "steer_start": None,
+            "steer_end": None,
+            "monitor_status": False,
+        }
+        if args.num_steps is not None:
+            sample["num_steps"] = args.num_steps
+        if args.batch_size is not None:
+            sample["batch_size"] = args.batch_size
+        if args.guidance_scale is not None:
+            sample["guidance_scale"] = args.guidance_scale
+        if args.eta is not None:
+            sample["eta"] = args.eta
+        if args.num_particles is not None:
+            sample["num_particles"] = args.num_particles
+        if args.batch_p is not None:
+            sample["batch_p"] = args.batch_p
+        if args.stein_step is not None:
+            sample["stein_step"] = args.stein_step
+        if args.stein_loop is not None:
+            sample["stein_loop"] = args.stein_loop
+        if args.stein_kernel is not None:
+            sample["stein_kernel"] = args.stein_kernel
+        if args.stein_adagrad_eps is not None:
+            sample["stein_adagrad_eps"] = args.stein_adagrad_eps
+        if args.kl_coeff is not None:
+            sample["kl_coeff"] = args.kl_coeff
+        if args.monitor_status:
+            sample["monitor_status"] = True
+        if args.steer_start is not None:
+            sample["steer_start"] = args.steer_start
+        if args.steer_end is not None:
+            sample["steer_end"] = args.steer_end
+
+    payload = {
+        "runner": "gradient_sdxl_batch",
+        "created_at_unix": float(time.time()),
+        "pipeline_type": "sdxl",
+        "pipeline_script": str(args.sdxl_script),
+        "config_name": args.config,
+        "model": model,
+        "model_revision": model_revision,
+        "reward_fn": reward_fn,
+        "seed": seed,
+        "device": args.device,
+        "negative_prompt": args.negative_prompt,
+        "sample": _json_safe(sample),
+        "batch_args": {k: _json_safe(v) for k, v in vars(args).items()},
+    }
+    return payload
+
 
 def main() -> int:
     args = parse_args()
@@ -341,6 +492,10 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = args.log_dir or (args.output_dir / "_batch_logs")
     log_dir.mkdir(parents=True, exist_ok=True)
+    pipeline_config_payload = _resolve_pipeline_config(args)
+    pipeline_config_path = args.output_dir / "pipeline_run_config.json"
+    with pipeline_config_path.open("w", encoding="utf-8") as f:
+        json.dump(pipeline_config_payload, f, indent=2)
 
     _title("Gradient SDXL Batch Runner")
     print(f"Prompt file : {args.prompts_file}")
@@ -351,18 +506,12 @@ def main() -> int:
     print()
 
     rows: List[Dict[str, Any]] = []
-    eval_rows: List[Dict[str, Any]] = []
     success_count = 0
     csv_path = args.output_dir / "batch_eval_summary.csv"
-    csv_fieldnames = [
-        "index",
-        "prompt",
-        "steer_mean",
-        "steer_max",
-        "eval_mean",
-        "eval_max",
-        "status",
-    ]
+    csv_fieldnames = ["index", "prompt", "steer_mean", "steer_max"]
+    for scorer_name in FINAL_SCORERS:
+        csv_fieldnames.extend([f"{scorer_name}_mean", f"{scorer_name}_max"])
+    csv_fieldnames.append("status")
 
     batch_start = time.time()
     total_runs = len(selected_prompts)
@@ -386,22 +535,16 @@ def main() -> int:
             if args.dry_run:
                 success_count += 1
                 print(_c("  dry-run command:", _Style.DIM), " ".join(cmd))
-                rows.append({
-                    "index": global_idx,
-                    "status": "DRY",
-                    "elapsed": 0.0,
-                    "prompt": prompt,
-                })
-                eval_row = {
-                    "index": global_idx,
-                    "prompt": prompt,
-                    "steer_mean": "",
-                    "steer_max": "",
-                    "eval_mean": "",
-                    "eval_max": "",
-                    "status": "DRY",
-                }
-                eval_rows.append(eval_row)
+                rows.append(
+                    {
+                        "index": global_idx,
+                        "status": "DRY",
+                        "elapsed": 0.0,
+                        "prompt": prompt,
+                    }
+                )
+                reward_stats = _blank_reward_stats()
+                eval_row = _build_eval_row(global_idx, prompt, "DRY", reward_stats)
                 eval_writer.writerow(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
@@ -416,62 +559,40 @@ def main() -> int:
             stdout_path.write_text(proc.stdout or "", encoding="utf-8")
             stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
-            reward_stats = _extract_reward_stats(proc.stdout or "")
+            reward_stats = _extract_reward_stats(run_output_dir)
             if proc.returncode == 0:
                 success_count += 1
                 status = _c("OK", _Style.GREEN, _Style.BOLD)
-                rows.append({
-                    "index": global_idx,
-                    "status": "OK",
-                    "elapsed": elapsed,
-                    "prompt": prompt,
-                })
-                eval_row = {
-                    "index": global_idx,
-                    "prompt": prompt,
-                    "steer_mean": reward_stats["steer_mean"],
-                    "steer_max": reward_stats["steer_max"],
-                    "eval_mean": reward_stats["eval_mean"],
-                    "eval_max": reward_stats["eval_max"],
-                    "status": "OK",
-                }
-                eval_rows.append(eval_row)
+                rows.append(
+                    {
+                        "index": global_idx,
+                        "status": "OK",
+                        "elapsed": elapsed,
+                        "prompt": prompt,
+                    }
+                )
+                eval_row = _build_eval_row(global_idx, prompt, "OK", reward_stats)
                 eval_writer.writerow(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
                 print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
-                print(
-                    _c(
-                        "  rewards: "
-                        f"eval_mean={_fmt_reward_stat(reward_stats['eval_mean'])} "
-                        f"eval_max={_fmt_reward_stat(reward_stats['eval_max'])} "
-                        f"steer_mean={_fmt_reward_stat(reward_stats['steer_mean'])} "
-                        f"steer_max={_fmt_reward_stat(reward_stats['steer_max'])}",
-                        _Style.DIM,
-                    )
-                )
+                print(_c(_reward_log_line(reward_stats), _Style.DIM))
             else:
                 status = _c("FAIL", _Style.RED, _Style.BOLD)
-                rows.append({
-                    "index": global_idx,
-                    "status": "FAIL",
-                    "elapsed": elapsed,
-                    "prompt": prompt,
-                })
-                eval_row = {
-                    "index": global_idx,
-                    "prompt": prompt,
-                    "steer_mean": reward_stats["steer_mean"],
-                    "steer_max": reward_stats["steer_max"],
-                    "eval_mean": reward_stats["eval_mean"],
-                    "eval_max": reward_stats["eval_max"],
-                    "status": "FAIL",
-                }
-                eval_rows.append(eval_row)
+                rows.append(
+                    {
+                        "index": global_idx,
+                        "status": "FAIL",
+                        "elapsed": elapsed,
+                        "prompt": prompt,
+                    }
+                )
+                eval_row = _build_eval_row(global_idx, prompt, "FAIL", reward_stats)
                 eval_writer.writerow(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
                 print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {proc.returncode}", _Style.DIM))
+                print(_c(_reward_log_line(reward_stats), _Style.DIM))
                 stderr_tail = (proc.stderr or "").splitlines()[-20:]
                 if stderr_tail:
                     print(_c("  stderr tail:", _Style.YELLOW, _Style.BOLD))

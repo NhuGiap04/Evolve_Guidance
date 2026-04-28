@@ -212,4 +212,4 @@ __marimo__/
 # Jupyter
 *.ipynb
 
-references/
+logs/

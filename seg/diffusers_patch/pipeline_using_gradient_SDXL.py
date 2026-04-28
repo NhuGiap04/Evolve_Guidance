@@ -203,27 +203,18 @@ def pipeline_using_gradient_sdxl(
     stein_kernel: str = "rbf",
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
-    kl_coeff: float = 1.0,
+    kl_coeff: float = 0.0001,
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
-    intermediate_rewards: bool = False,
-    monitor_stein_delta: bool = False,
+    verbose: bool = False,
+    monitor_status: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
     """Run SDXL denoising with optional Stein particle transport guidance."""
 
     callback = kwargs.pop("callback", None)
     callback_steps = kwargs.pop("callback_steps", None)
-
-    legacy_return_intermediate_rewards = kwargs.pop("return_intermediate_rewards", None)
-    legacy_show_intermediate_rewards = kwargs.pop("show_intermediate_rewards", None)
-    if legacy_return_intermediate_rewards is not None or legacy_show_intermediate_rewards is not None:
-        intermediate_rewards = (
-            intermediate_rewards
-            or bool(legacy_return_intermediate_rewards)
-            or bool(legacy_show_intermediate_rewards)
-        )
 
     if callback is not None:
         deprecate(
@@ -638,16 +629,15 @@ def pipeline_using_gradient_sdxl(
 
             if is_steered_step:
                 latents_before_stein = None
-                if monitor_stein_delta or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
+                if monitor_status or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     latents_before_stein = latents.detach().clone()
 
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents_before_stein
 
-                should_log_rewards = intermediate_rewards
                 pre_reward = None
 
-                if should_log_rewards:
+                if verbose:
                     intermediate_rewards_data["step_indices"].append(float(i))
                     intermediate_rewards_data["timesteps"].append(float(t_int))
 
@@ -666,9 +656,9 @@ def pipeline_using_gradient_sdxl(
                     reward_values, reward_grad = _compute_reward_grad(
                         latents,
                         t,
-                        return_rewards=should_log_rewards and loop_idx == 0,
+                        return_rewards=verbose and loop_idx == 0,
                     )
-                    if should_log_rewards and loop_idx == 0 and reward_values is not None:
+                    if verbose and loop_idx == 0 and reward_values is not None:
                         pre_reward = reward_values
 
                     score_p_t = prior_score.float()
@@ -695,51 +685,44 @@ def pipeline_using_gradient_sdxl(
 
                     latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
 
-                if monitor_stein_delta and latents_before_stein is not None:
+                if monitor_status and latents_before_stein is not None:
                     delta = (latents - latents_before_stein).flatten(1).norm(dim=1)
                     base = latents_before_stein.flatten(1).norm(dim=1)
                     rel_delta = (delta / (base + 1e-8)).mean()
                     before_flat = latents_before_stein.flatten(1).float()
                     after_flat = latents.flatten(1).float()
-                    cosine_sim = (
+                    steered_cosine_sim = (
                         (before_flat * after_flat).sum(dim=1)
                         / (before_flat.norm(dim=1) * after_flat.norm(dim=1) + 1e-8)
                     ).mean()
-                    score_reward_ratio = None
-                    score_p_t_norm_mean = None
+                    score_pt_norm_mean = None
                     target_score_norm_mean = None
                     reward_grad_norm_mean = None
-                    score_p_t_target_cosine = None
                     if last_score_p_t is not None and last_reward_grad is not None:
-                        score_p_t_norm = last_score_p_t.flatten(1).norm(dim=1)
+                        score_pt_norm = last_score_p_t.flatten(1).norm(dim=1)
                         reward_grad_norm = last_reward_grad.float().flatten(1).norm(dim=1)
-                        score_reward_ratio = score_p_t_norm / (reward_grad_norm + 1e-8)
-                        score_p_t_norm_mean = score_p_t_norm.mean().item()
+                        score_pt_norm_mean = score_pt_norm.mean().item()
                         reward_grad_norm_mean = reward_grad_norm.mean().item()
                     if last_score_p_t is not None and last_score_q_t is not None:
-                        score_p_t_flat = last_score_p_t.flatten(1)
                         target_score_flat = last_score_q_t.flatten(1)
                         target_score_norm = target_score_flat.norm(dim=1)
                         target_score_norm_mean = target_score_norm.mean().item()
-                        score_p_t_target_cosine = (
-                            (score_p_t_flat * target_score_flat).sum(dim=1)
-                            / (score_p_t_flat.norm(dim=1) * target_score_norm + 1e-8)
-                        ).mean().item()
+
+                    def _fmt3(val: Optional[float]) -> str:
+                        return "None" if val is None else f"{val:.3f}"
 
                     print(
-                        "i=", i,
-                        "t=", t_int,
-                        "rel_delta=", rel_delta.item(),
-                        "abs_delta=", delta.mean().item(),
-                        "cosine_sim=", cosine_sim.item(),
-                        "score_p_t_norm=", score_p_t_norm_mean,
-                        "target_score_norm=", target_score_norm_mean,
-                        "reward_grad_norm=", reward_grad_norm_mean,
-                        "score_p_t_to_reward_grad_ratio=", None if score_reward_ratio is None else score_reward_ratio.mean().item(),
-                        "score_p_t_to_target_score_cosine=", score_p_t_target_cosine,
+                        f"i={i} "
+                        f"t={t_int} "
+                        f"rel_delta={rel_delta.item():.3f} "
+                        f"abs_delta={delta.mean().item():.3f} "
+                        f"steered_cosine_sim={steered_cosine_sim.item():.3f} "
+                        f"score_pt_norm={_fmt3(score_pt_norm_mean)} "
+                        f"target_score_norm={_fmt3(target_score_norm_mean)} "
+                        f"reward_grad_norm={_fmt3(reward_grad_norm_mean)}"
                     )
 
-                if should_log_rewards:
+                if verbose:
                     if pre_reward is None:
                         pre_reward = _compute_reward(latents, t)
 
@@ -750,13 +733,12 @@ def pipeline_using_gradient_sdxl(
                     intermediate_rewards_data["post_steer_mean"].append(float(post_reward.mean().item()))
                     intermediate_rewards_data["post_steer_max"].append(float(post_reward.max().item()))
 
-                    if intermediate_rewards:
-                        print(
-                            f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
-                            f"pre_max={pre_reward.max().item():.6f} "
-                            f"post_mean={post_reward.mean().item():.6f} "
-                            f"post_max={post_reward.max().item():.6f}"
-                        )
+                    print(
+                        f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
+                        f"pre_max={pre_reward.max().item():.6f} "
+                        f"post_mean={post_reward.mean().item():.6f} "
+                        f"post_max={post_reward.max().item():.6f}"
+                    )
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
                     post_stein_latents = latents.detach().clone()
@@ -844,7 +826,7 @@ def pipeline_using_gradient_sdxl(
             gather_idx = base_idx * num_particles + best_idx
             latents = latents[gather_idx]
 
-            if intermediate_rewards:
+            if verbose:
                 intermediate_rewards_data["final_best_particle_reward"] = [
                     float(v) for v in reward_grouped[base_idx, best_idx].detach().float().cpu().tolist()
                 ]
@@ -883,11 +865,11 @@ def pipeline_using_gradient_sdxl(
     self.maybe_free_model_hooks()
 
     if not return_dict:
-        if intermediate_rewards:
+        if verbose:
             return (image, intermediate_rewards_data)
         return (image,)
 
-    if intermediate_rewards:
+    if verbose:
         return {"images": image, "intermediate_rewards": intermediate_rewards_data}
 
     return StableDiffusionXLPipelineOutput(images=image)
