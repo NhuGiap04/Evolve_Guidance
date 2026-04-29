@@ -162,9 +162,18 @@ def _reward_guidance_scale(
     rho: float,
     eps: float = 1e-6,
 ) -> torch.Tensor:
+    """Compute reward guidance scale factor.
+    
+    Scale = rho * (prior_norm / reward_norm)
+    
+    Rationale:
+    - When prior_norm is large (strong diffusion signal): scale is larger, reward can match it
+    - When prior_norm is small (weak diffusion signal): scale is smaller, reward doesn't overwhelm
+    - This keeps the contribution balanced and stable
+    """
     prior_norm = torch.linalg.vector_norm(prior_score.float().reshape(prior_score.shape[0], -1), dim=1)
     reward_norm = torch.linalg.vector_norm(reward_grad.float().reshape(reward_grad.shape[0], -1), dim=1)
-    scale = rho * reward_norm / torch.clamp(prior_norm, min=eps)
+    scale = rho * prior_norm / torch.clamp(reward_norm, min=eps)
     return scale.view(-1, *([1] * (reward_grad.ndim - 1)))
 
 
@@ -471,6 +480,10 @@ def pipeline_using_gradient_sd(
 
     use_stein = reward_fn is not None and stein_loop > 0 and stein_step > 0
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
+    
+    # Debug: Log setup
+    print(f"[DEBUG] Setup: use_stein={use_stein}, intermediate_rewards={intermediate_rewards}, "
+          f"reward_fn_exists={reward_fn is not None}, stein_step={stein_step}, stein_loop={stein_loop}")
 
     intermediate_rewards_data: Dict[str, List[float]] = {
         "step_indices": [],
@@ -667,6 +680,7 @@ def pipeline_using_gradient_sd(
                 if should_log_rewards:
                     intermediate_rewards_data["step_indices"].append(float(i))
                     intermediate_rewards_data["timesteps"].append(float(t_int))
+                    print(f"[DEBUG] Logging rewards at step {i}/{len(timesteps)-1} (t={t_int})")
 
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
 
@@ -890,10 +904,12 @@ def pipeline_using_gradient_sd(
 
     if not return_dict:
         if intermediate_rewards:
+            print(f"[DEBUG] Returning intermediate_rewards with {len(intermediate_rewards_data['step_indices'])} logged steps")
             return (image, intermediate_rewards_data)
         return (image,)
 
     if intermediate_rewards:
+        print(f"[DEBUG] Returning intermediate_rewards with {len(intermediate_rewards_data['step_indices'])} logged steps")
         return {"images": image, "intermediate_rewards": intermediate_rewards_data}
 
     return StableDiffusionPipelineOutput(images=image)
