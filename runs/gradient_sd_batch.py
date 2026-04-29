@@ -282,15 +282,67 @@ def _blank_reward_stats() -> Dict[str, str]:
     return stats
 
 
-def _extract_reward_stats(run_output_dir: Path) -> Dict[str, str]:
-    stats = _blank_reward_stats()
-    final_rewards_path = run_output_dir / "final_rewards.json"
-    if not final_rewards_path.exists():
-        return stats
+def _final_rewards_candidates(run_output_dir: Path) -> List[Path]:
+    candidates = [run_output_dir / "final_rewards.json"]
+    if run_output_dir.exists():
+        candidates.extend(sorted(run_output_dir.glob("*/final_rewards.json")))
+        candidates.extend(sorted(run_output_dir.rglob("final_rewards.json")))
 
-    try:
-        payload = json.loads(final_rewards_path.read_text(encoding="utf-8"))
-    except Exception:
+    unique_candidates = []
+    seen = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique_candidates.append(path)
+    return unique_candidates
+
+
+def _load_final_rewards_payload(run_output_dir: Path) -> Optional[Dict[str, Any]]:
+    for final_rewards_path in _final_rewards_candidates(run_output_dir):
+        if not final_rewards_path.exists():
+            continue
+        try:
+            payload = json.loads(final_rewards_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _extract_reward_stats_from_stdout(stdout: str, stats: Dict[str, str]) -> None:
+    steer_match = re.search(
+        r"Final steering reward stats:\s*mean=([-+0-9.eE]+)\s+max=([-+0-9.eE]+)",
+        stdout,
+    )
+    if steer_match:
+        if not stats["steer_mean"]:
+            stats["steer_mean"] = _to_metric_str(float(steer_match.group(1)))
+        if not stats["steer_max"]:
+            stats["steer_max"] = _to_metric_str(float(steer_match.group(2)))
+
+    for match in re.finditer(
+        r"Final ([A-Za-z0-9_]+) stats:\s*mean=([-+0-9.eE]+)\s+max=([-+0-9.eE]+)",
+        stdout,
+    ):
+        scorer_name = match.group(1)
+        if scorer_name not in FINAL_SCORERS:
+            continue
+        mean_key = f"{scorer_name}_mean"
+        max_key = f"{scorer_name}_max"
+        if not stats[mean_key]:
+            stats[mean_key] = _to_metric_str(float(match.group(2)))
+        if not stats[max_key]:
+            stats[max_key] = _to_metric_str(float(match.group(3)))
+
+
+def _extract_reward_stats(run_output_dir: Path, stdout: str = "") -> Dict[str, str]:
+    stats = _blank_reward_stats()
+    payload = _load_final_rewards_payload(run_output_dir)
+
+    if payload is None:
+        _extract_reward_stats_from_stdout(stdout, stats)
         return stats
 
     steer_stats = payload.get("steer_reward_stats", {})
@@ -303,6 +355,7 @@ def _extract_reward_stats(run_output_dir: Path) -> Dict[str, str]:
         stats[f"{scorer_name}_mean"] = _to_metric_str(scorer_stats.get("mean"))
         stats[f"{scorer_name}_max"] = _to_metric_str(scorer_stats.get("max"))
 
+    _extract_reward_stats_from_stdout(stdout, stats)
     return stats
 
 
@@ -559,7 +612,7 @@ def main() -> int:
             stdout_path.write_text(proc.stdout or "", encoding="utf-8")
             stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
-            reward_stats = _extract_reward_stats(run_output_dir)
+            reward_stats = _extract_reward_stats(run_output_dir, proc.stdout or "")
             if proc.returncode == 0:
                 success_count += 1
                 status = _c("OK", _Style.GREEN, _Style.BOLD)
