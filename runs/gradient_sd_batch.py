@@ -524,6 +524,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
+    parser.add_argument("--reward-guidance-rho", type=float, default=None)
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
 
