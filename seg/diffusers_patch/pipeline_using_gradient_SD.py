@@ -161,19 +161,27 @@ def _reward_guidance_scale(
     reward_grad: torch.Tensor,
     rho: float,
     eps: float = 1e-6,
+    max_scale: float = 10.0,
 ) -> torch.Tensor:
-    """Compute reward guidance scale factor.
-    
-    Scale = rho * (prior_norm / reward_norm)
-    
-    Rationale:
-    - When prior_norm is large (strong diffusion signal): scale is larger, reward can match it
-    - When prior_norm is small (weak diffusion signal): scale is smaller, reward doesn't overwhelm
-    - This keeps the contribution balanced and stable
+    """Compute per-sample reward guidance scaling.
+
+    Base rule: ``scale = rho * (||prior_score|| / ||reward_grad||)``.
+    This keeps reward-gradient magnitude on roughly the same order as the diffusion prior.
+
+    Numerical safeguards:
+    - Denominator is clamped by ``eps``.
+    - Non-finite values are replaced.
+    - Scale is upper-bounded by ``max_scale``.
     """
     prior_norm = torch.linalg.vector_norm(prior_score.float().reshape(prior_score.shape[0], -1), dim=1)
     reward_norm = torch.linalg.vector_norm(reward_grad.float().reshape(reward_grad.shape[0], -1), dim=1)
     scale = rho * prior_norm / torch.clamp(reward_norm, min=eps)
+    safe_max = float(max_scale) if max_scale is not None else 10.0
+    scale = torch.nan_to_num(scale, nan=0.0, posinf=safe_max, neginf=0.0)
+    if max_scale is not None:
+        scale = scale.clamp(min=0.0, max=max_scale)
+    else:
+        scale = scale.clamp(min=0.0)
     return scale.view(-1, *([1] * (reward_grad.ndim - 1)))
 
 

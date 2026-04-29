@@ -147,8 +147,9 @@ def _extract_intermediate_reward_trace(stdout: str) -> Dict[str, List[float]]:
     }
 
     reward_pattern = re.compile(
-        r"^\[t=(\d+)\]\s+pre_mean=([\-0-9.eE]+)\s+pre_max=([\-0-9.eE]+)\s+"
-        r"post_mean=([\-0-9.eE]+)\s+post_max=([\-0-9.eE]+)$"
+        r"^\[t=(\d+)\]\s+(?:reward:\s*)?"
+        r"pre_mean=([\-0-9.eE]+)\s+pre_max=([\-0-9.eE]+)\s+"
+        r"post_mean=([\-0-9.eE]+)\s+post_max=([\-0-9.eE]+)(?:\s+\|.*)?$"
     )
     score_pattern = re.compile(
         r"^\[t=(\d+)\]\s+pre_score_norm_mean=([\-0-9.eE]+)\s+pre_score_norm_max=([\-0-9.eE]+)\s+"
@@ -156,7 +157,7 @@ def _extract_intermediate_reward_trace(stdout: str) -> Dict[str, List[float]]:
     )
 
     for line in stdout.splitlines():
-        match = reward_pattern.match(line.strip())
+        match = reward_pattern.search(line.strip())
         if match:
             trace["timestep"].append(float(match.group(1)))
             trace["pre_mean"].append(float(match.group(2)))
