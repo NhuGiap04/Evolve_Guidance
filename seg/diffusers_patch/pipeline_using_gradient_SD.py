@@ -173,6 +173,26 @@ def _score_norm_stats(score: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     return score_norm.mean(), score_norm.max()
 
 
+def _compute_cosine_similarity(score1: torch.Tensor, score2: torch.Tensor, eps: float = 1e-8) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute cosine similarity between two score tensors.
+    
+    Returns: (mean_similarity, min_similarity, max_similarity)
+    """
+    # Flatten to vectors: (batch_size, -1)
+    s1_flat = score1.float().reshape(score1.shape[0], -1)
+    s2_flat = score2.float().reshape(score2.shape[0], -1)
+    
+    # Compute dot product and norms for each sample
+    dot_product = (s1_flat * s2_flat).sum(dim=1)
+    norm1 = torch.linalg.vector_norm(s1_flat, dim=1)
+    norm2 = torch.linalg.vector_norm(s2_flat, dim=1)
+    
+    # Cosine similarity
+    similarity = dot_product / (torch.clamp(norm1 * norm2, min=eps))
+    
+    return similarity.mean(), similarity.min(), similarity.max()
+
+
 @torch.no_grad()
 def pipeline_using_gradient_sd(
     self: StableDiffusionPipeline,
@@ -463,6 +483,15 @@ def pipeline_using_gradient_sd(
         "pre_score_norm_max": [],
         "post_score_norm_mean": [],
         "post_score_norm_max": [],
+        "prior_score_norm_mean": [],
+        "prior_score_norm_max": [],
+        "reward_grad_norm_mean": [],
+        "reward_grad_norm_max": [],
+        "reward_scale_mean": [],
+        "reward_scale_max": [],
+        "cosine_similarity_mean": [],
+        "cosine_similarity_min": [],
+        "cosine_similarity_max": [],
     }
 
     def _slice_condition_tensor(
@@ -658,6 +687,25 @@ def pipeline_using_gradient_sd(
 
                     reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
                     score_q = prior_score.float() + reward_scale * reward_grad.float()
+                    
+                    # Log norm statistics for prior score and reward gradient
+                    if should_log_rewards and loop_idx == 0:
+                        prior_score_norm_mean, prior_score_norm_max = _score_norm_stats(prior_score)
+                        reward_grad_norm_mean, reward_grad_norm_max = _score_norm_stats(reward_grad)
+                        reward_scale_flat = reward_scale.reshape(reward_scale.shape[0], -1)
+                        reward_scale_norm = torch.linalg.vector_norm(reward_scale_flat, dim=1)
+                        intermediate_rewards_data["prior_score_norm_mean"].append(float(prior_score_norm_mean.item()))
+                        intermediate_rewards_data["prior_score_norm_max"].append(float(prior_score_norm_max.item()))
+                        intermediate_rewards_data["reward_grad_norm_mean"].append(float(reward_grad_norm_mean.item()))
+                        intermediate_rewards_data["reward_grad_norm_max"].append(float(reward_grad_norm_max.item()))
+                        intermediate_rewards_data["reward_scale_mean"].append(float(reward_scale_norm.mean().item()))
+                        intermediate_rewards_data["reward_scale_max"].append(float(reward_scale_norm.max().item()))
+                        
+                        # Compute and log cosine similarity between prior score and reward gradient
+                        cos_sim_mean, cos_sim_min, cos_sim_max = _compute_cosine_similarity(prior_score, reward_grad)
+                        intermediate_rewards_data["cosine_similarity_mean"].append(float(cos_sim_mean.item()))
+                        intermediate_rewards_data["cosine_similarity_min"].append(float(cos_sim_min.item()))
+                        intermediate_rewards_data["cosine_similarity_max"].append(float(cos_sim_max.item()))
 
                     if loop_idx == 0:
                         pre_score_norm_mean, pre_score_norm_max = _score_norm_stats(prior_score)
@@ -704,10 +752,17 @@ def pipeline_using_gradient_sd(
 
                     if intermediate_rewards:
                         print(
-                            f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
-                            f"pre_max={pre_reward.max().item():.6f} "
-                            f"post_mean={post_reward.mean().item():.6f} "
-                            f"post_max={post_reward.max().item():.6f}"
+                            f"[t={t_int:04d}] reward: pre_mean={pre_reward.mean().item():.6f} pre_max={pre_reward.max().item():.6f} "
+                            f"post_mean={post_reward.mean().item():.6f} post_max={post_reward.max().item():.6f} | "
+                            f"score_norm: prior_mean={intermediate_rewards_data['prior_score_norm_mean'][-1]:.6f} "
+                            f"prior_max={intermediate_rewards_data['prior_score_norm_max'][-1]:.6f} | "
+                            f"grad_norm: mean={intermediate_rewards_data['reward_grad_norm_mean'][-1]:.6f} "
+                            f"max={intermediate_rewards_data['reward_grad_norm_max'][-1]:.6f} | "
+                            f"scale: mean={intermediate_rewards_data['reward_scale_mean'][-1]:.6f} "
+                            f"max={intermediate_rewards_data['reward_scale_max'][-1]:.6f} | "
+                            f"cos_sim: mean={intermediate_rewards_data['cosine_similarity_mean'][-1]:.4f} "
+                            f"min={intermediate_rewards_data['cosine_similarity_min'][-1]:.4f} "
+                            f"max={intermediate_rewards_data['cosine_similarity_max'][-1]:.4f}"
                         )
                         print(
                             f"[t={t_int:04d}] pre_score_norm_mean={pre_score_norm_mean.item():.6f} "
