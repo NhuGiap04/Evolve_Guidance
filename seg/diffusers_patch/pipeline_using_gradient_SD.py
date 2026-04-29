@@ -156,6 +156,18 @@ def _to_timestep_int(t: Union[int, torch.Tensor]) -> int:
     return int(t.item()) if torch.is_tensor(t) else int(t)
 
 
+def _reward_guidance_scale(
+    prior_score: torch.Tensor,
+    reward_grad: torch.Tensor,
+    rho: float,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    prior_norm = torch.linalg.vector_norm(prior_score.float().reshape(prior_score.shape[0], -1), dim=1)
+    reward_norm = torch.linalg.vector_norm(reward_grad.float().reshape(reward_grad.shape[0], -1), dim=1)
+    scale = rho * reward_norm / torch.clamp(prior_norm, min=eps)
+    return scale.view(-1, *([1] * (reward_grad.ndim - 1)))
+
+
 @torch.no_grad()
 def pipeline_using_gradient_sd(
     self: StableDiffusionPipeline,
@@ -192,6 +204,7 @@ def pipeline_using_gradient_sd(
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 1.0,
+    reward_guidance_rho: float = 1.0,
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
@@ -242,6 +255,8 @@ def pipeline_using_gradient_sd(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
+    if reward_guidance_rho < 0:
+        raise ValueError("reward_guidance_rho must be >= 0")
 
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
@@ -628,7 +643,8 @@ def pipeline_using_gradient_sd(
                     if should_log_rewards and loop_idx == 0 and reward_values is not None:
                         pre_reward = reward_values
 
-                    score_q = prior_score.float() + reward_grad.float()
+                    reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
+                    score_q = prior_score.float() + reward_scale * reward_grad.float()
 
                     if stein_kernel != "rbf":
                         raise ValueError(f"Unsupported stein_kernel: {stein_kernel}. Only 'rbf' is currently supported.")

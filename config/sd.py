@@ -20,6 +20,7 @@ def seg():
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
     config.sample.kl_coeff = 1.0
+    config.sample.reward_guidance_rho = 1.0
     config.sample.steer_start = None
     config.sample.steer_end = None
     config.sample.intermediate_rewards = True

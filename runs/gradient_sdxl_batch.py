@@ -267,6 +267,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     _append_optional_arg(cmd, "--stein-kernel", args.stein_kernel)
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
+    _append_optional_arg(cmd, "--reward-guidance-rho", args.reward_guidance_rho)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
 

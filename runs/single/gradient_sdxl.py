@@ -79,6 +79,12 @@ def parse_args():
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
+        "--reward-guidance-rho",
+        type=float,
+        default=None,
+        help="Optional reward guidance coefficient multiplier override.",
+    )
+    parser.add_argument(
         "--steer-start",
         type=int,
         default=None,
@@ -327,6 +333,8 @@ def main():
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
         config.sample.kl_coeff = args.kl_coeff
+    if args.reward_guidance_rho is not None:
+        config.sample.reward_guidance_rho = args.reward_guidance_rho
     if args.steer_start is not None:
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
@@ -431,6 +439,7 @@ def main():
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
+        reward_guidance_rho=config.sample.reward_guidance_rho,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         intermediate_rewards=(args.save_intermediate_rewards or args.show_intermediate_rewards),
