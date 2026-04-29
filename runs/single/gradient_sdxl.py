@@ -455,7 +455,13 @@ def main():
         result = pipeline_using_gradient_sdxl(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
-    final_latents = result[0] if isinstance(result, (tuple, list)) else result
+    pipeline_trace_data = None
+    if isinstance(result, (tuple, list)):
+        final_latents = result[0]
+        if len(result) > 1:
+            pipeline_trace_data = result[1]
+    else:
+        final_latents = result
 
     with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
@@ -525,6 +531,73 @@ def main():
         torch.save(trace_entries, deferred_trace_path)
         print(f"Saved deferred trace latents to: {deferred_trace_path}")
 
+    if args.save_intermediate_rewards and pipeline_trace_data is not None:
+        guided_score_rows = []
+        guided_score_mean_before = []
+        guided_score_mean_after = []
+        guided_score_max_before = []
+        guided_score_max_after = []
+
+        pre_score_norm_mean_trace = pipeline_trace_data.get("pre_score_norm_mean", [])
+        pre_score_norm_max_trace = pipeline_trace_data.get("pre_score_norm_max", [])
+        post_score_norm_mean_trace = pipeline_trace_data.get("post_score_norm_mean", [])
+        post_score_norm_max_trace = pipeline_trace_data.get("post_score_norm_max", [])
+
+        for trace_idx, trace in enumerate(trace_entries):
+            if trace_idx >= len(pre_score_norm_mean_trace):
+                break
+
+            row = {
+                "step_index": int(trace["step_index"]),
+                "timestep": int(trace["timestep"]),
+                "pre_score_norm_mean": float(pre_score_norm_mean_trace[trace_idx]),
+                "post_score_norm_mean": float(post_score_norm_mean_trace[trace_idx]),
+                "pre_score_norm_max": float(pre_score_norm_max_trace[trace_idx]),
+                "post_score_norm_max": float(post_score_norm_max_trace[trace_idx]),
+            }
+            guided_score_rows.append(row)
+            guided_score_mean_before.append(row["pre_score_norm_mean"])
+            guided_score_mean_after.append(row["post_score_norm_mean"])
+            guided_score_max_before.append(row["pre_score_norm_max"])
+            guided_score_max_after.append(row["post_score_norm_max"])
+
+        if guided_score_rows:
+            guided_score_csv_path = out_dir / "guided_score_trace.csv"
+            with guided_score_csv_path.open("w", encoding="utf-8", newline="") as guided_score_file:
+                writer = csv.DictWriter(
+                    guided_score_file,
+                    fieldnames=[
+                        "step_index",
+                        "timestep",
+                        "pre_score_norm_mean",
+                        "post_score_norm_mean",
+                        "pre_score_norm_max",
+                        "post_score_norm_max",
+                    ],
+                )
+                writer.writeheader()
+                for row in guided_score_rows:
+                    writer.writerow(row)
+
+            plot_x = list(range(1, len(guided_score_rows) + 1))
+            save_before_after_plot(
+                plot_x,
+                guided_score_mean_before,
+                guided_score_mean_after,
+                title="Before/After guided score norm - mean",
+                ylabel="L2 norm",
+                out_path=out_dir / "guided_score_before_after_mean.png",
+            )
+            save_before_after_plot(
+                plot_x,
+                guided_score_max_before,
+                guided_score_max_after,
+                title="Before/After guided score norm - max",
+                ylabel="L2 norm",
+                out_path=out_dir / "guided_score_before_after_max.png",
+            )
+            print(f"Saved guided score norm trace to: {guided_score_csv_path}")
+
     if args.save_intermediate_rewards and args.run_eval_now:
         # 3) Deferred intermediate reward evaluation in trace-eval micro-batches.
         trace_rows = []
@@ -532,12 +605,22 @@ def main():
         post_steer_mean = []
         pre_steer_max = []
         post_steer_max = []
+        pre_score_norm_mean = []
+        post_score_norm_mean = []
+        pre_score_norm_max = []
+        post_score_norm_max = []
         pre_eval_mean = []
         post_eval_mean = []
         pre_eval_max = []
         post_eval_max = []
 
-        for trace in trace_entries:
+        score_norm_trace = pipeline_trace_data or {}
+        pre_score_norm_mean_trace = score_norm_trace.get("pre_score_norm_mean", [])
+        post_score_norm_mean_trace = score_norm_trace.get("post_score_norm_mean", [])
+        pre_score_norm_max_trace = score_norm_trace.get("pre_score_norm_max", [])
+        post_score_norm_max_trace = score_norm_trace.get("post_score_norm_max", [])
+
+        for trace_idx, trace in enumerate(trace_entries):
             trace_prompts = prompt_particles[: trace["pre_x0_latents_cpu"].shape[0]]
             if len(trace_prompts) != trace["pre_x0_latents_cpu"].shape[0]:
                 trace_prompts = [args.prompt] * trace["pre_x0_latents_cpu"].shape[0]
@@ -572,6 +655,16 @@ def main():
                 "post_steer_max": float(post_steer_scores.max().item()),
             }
 
+            if trace_idx < len(pre_score_norm_mean_trace):
+                row["pre_score_norm_mean"] = float(pre_score_norm_mean_trace[trace_idx])
+                row["post_score_norm_mean"] = float(post_score_norm_mean_trace[trace_idx])
+                row["pre_score_norm_max"] = float(pre_score_norm_max_trace[trace_idx])
+                row["post_score_norm_max"] = float(post_score_norm_max_trace[trace_idx])
+                pre_score_norm_mean.append(row["pre_score_norm_mean"])
+                post_score_norm_mean.append(row["post_score_norm_mean"])
+                pre_score_norm_max.append(row["pre_score_norm_max"])
+                post_score_norm_max.append(row["post_score_norm_max"])
+
             if eval_scorer is not None and pre_eval_scores is not None and post_eval_scores is not None:
                 row["pre_eval_mean"] = float(pre_eval_scores.mean().item())
                 row["post_eval_mean"] = float(post_eval_scores.mean().item())
@@ -592,6 +685,15 @@ def main():
                 f"max: {row['pre_steer_max']:.6f} -> {row['post_steer_max']:.6f} "
                 f"(delta={row['post_steer_max'] - row['pre_steer_max']:+.6f})"
             )
+
+            if "pre_score_norm_mean" in row:
+                print(
+                    f"[score step {row['step_index']:03d} | t={row['timestep']:04d}] "
+                    f"mean-norm: {row['pre_score_norm_mean']:.6f} -> {row['post_score_norm_mean']:.6f} "
+                    f"(delta={row['post_score_norm_mean'] - row['pre_score_norm_mean']:+.6f}) | "
+                    f"max-norm: {row['pre_score_norm_max']:.6f} -> {row['post_score_norm_max']:.6f} "
+                    f"(delta={row['post_score_norm_max'] - row['pre_score_norm_max']:+.6f})"
+                )
 
             if "pre_eval_mean" in row:
                 pre_eval_mean.append(row["pre_eval_mean"])
@@ -617,6 +719,15 @@ def main():
                 "pre_steer_max",
                 "post_steer_max",
             ]
+            if len(pre_score_norm_mean) == len(trace_rows):
+                fieldnames.extend(
+                    [
+                        "pre_score_norm_mean",
+                        "post_score_norm_mean",
+                        "pre_score_norm_max",
+                        "post_score_norm_max",
+                    ]
+                )
             if eval_scorer is not None:
                 fieldnames.extend(["pre_eval_mean", "post_eval_mean", "pre_eval_max", "post_eval_max"])
 
@@ -660,6 +771,24 @@ def main():
                     title=f"Before/After eval reward ({args.eval_reward}) - max",
                     ylabel="Reward",
                     out_path=out_dir / "eval_before_after_max.png",
+                )
+
+            if len(pre_score_norm_mean) == len(trace_rows):
+                save_before_after_plot(
+                    plot_x,
+                    pre_score_norm_mean,
+                    post_score_norm_mean,
+                    title="Before/After guided score norm - mean",
+                    ylabel="L2 norm",
+                    out_path=out_dir / "guided_score_before_after_mean.png",
+                )
+                save_before_after_plot(
+                    plot_x,
+                    pre_score_norm_max,
+                    post_score_norm_max,
+                    title="Before/After guided score norm - max",
+                    ylabel="L2 norm",
+                    out_path=out_dir / "guided_score_before_after_max.png",
                 )
 
     if args.save_intermediate_images and len(step_latents_for_images) > 0:

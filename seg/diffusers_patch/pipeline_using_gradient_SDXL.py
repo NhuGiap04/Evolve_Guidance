@@ -169,6 +169,11 @@ def _reward_guidance_scale(
     return scale.view(-1, *([1] * (reward_grad.ndim - 1)))
 
 
+def _score_norm_stats(score: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    score_norm = torch.linalg.vector_norm(score.float().reshape(score.shape[0], -1), dim=1)
+    return score_norm.mean(), score_norm.max()
+
+
 @torch.no_grad()
 def pipeline_using_gradient_sdxl(
     self: StableDiffusionXLPipeline,
@@ -490,6 +495,10 @@ def pipeline_using_gradient_sdxl(
         "pre_steer_max": [],
         "post_steer_mean": [],
         "post_steer_max": [],
+        "pre_score_norm_mean": [],
+        "pre_score_norm_max": [],
+        "post_score_norm_mean": [],
+        "post_score_norm_max": [],
     }
 
     def _slice_condition_tensor(
@@ -660,6 +669,10 @@ def pipeline_using_gradient_sdxl(
 
                 should_log_rewards = intermediate_rewards
                 pre_reward = None
+                pre_score_norm_mean = None
+                pre_score_norm_max = None
+                post_score_norm_mean = None
+                post_score_norm_max = None
 
                 if should_log_rewards:
                     intermediate_rewards_data["step_indices"].append(float(i))
@@ -685,6 +698,10 @@ def pipeline_using_gradient_sdxl(
                     reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
                     score_q = prior_score.float() + reward_scale * reward_grad.float()
 
+                    if loop_idx == 0:
+                        pre_score_norm_mean, pre_score_norm_max = _score_norm_stats(prior_score)
+                        post_score_norm_mean, post_score_norm_max = _score_norm_stats(score_q)
+
                     if stein_kernel != "rbf":
                         raise ValueError(f"Unsupported stein_kernel: {stein_kernel}. Only 'rbf' is currently supported.")
 
@@ -707,6 +724,11 @@ def pipeline_using_gradient_sdxl(
                     if pre_reward is None:
                         pre_reward = _compute_reward(latents, t)
 
+                    if pre_score_norm_mean is None or pre_score_norm_max is None:
+                        pre_score_norm_mean, pre_score_norm_max = _score_norm_stats(prior_score)
+                    if post_score_norm_mean is None or post_score_norm_max is None:
+                        post_score_norm_mean, post_score_norm_max = _score_norm_stats(score_q)
+
                     intermediate_rewards_data["pre_steer_mean"].append(float(pre_reward.mean().item()))
                     intermediate_rewards_data["pre_steer_max"].append(float(pre_reward.max().item()))
 
@@ -714,12 +736,23 @@ def pipeline_using_gradient_sdxl(
                     intermediate_rewards_data["post_steer_mean"].append(float(post_reward.mean().item()))
                     intermediate_rewards_data["post_steer_max"].append(float(post_reward.max().item()))
 
+                    intermediate_rewards_data["pre_score_norm_mean"].append(float(pre_score_norm_mean.item()))
+                    intermediate_rewards_data["pre_score_norm_max"].append(float(pre_score_norm_max.item()))
+                    intermediate_rewards_data["post_score_norm_mean"].append(float(post_score_norm_mean.item()))
+                    intermediate_rewards_data["post_score_norm_max"].append(float(post_score_norm_max.item()))
+
                     if intermediate_rewards:
                         print(
                             f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
                             f"pre_max={pre_reward.max().item():.6f} "
                             f"post_mean={post_reward.mean().item():.6f} "
                             f"post_max={post_reward.max().item():.6f}"
+                        )
+                        print(
+                            f"[t={t_int:04d}] pre_score_norm_mean={pre_score_norm_mean.item():.6f} "
+                            f"pre_score_norm_max={pre_score_norm_max.item():.6f} "
+                            f"post_score_norm_mean={post_score_norm_mean.item():.6f} "
+                            f"post_score_norm_max={post_score_norm_max.item():.6f}"
                         )
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:

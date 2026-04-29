@@ -140,27 +140,43 @@ def _tail_lines(text: str, count: int) -> List[str]:
 
 
 def _extract_intermediate_reward_trace(stdout: str) -> Dict[str, List[float]]:
-    pattern = re.compile(
-        r"^\[t=(\d+)\]\s+pre_mean=([\-0-9.eE]+)\s+pre_max=([\-0-9.eE]+)\s+"
-        r"post_mean=([\-0-9.eE]+)\s+post_max=([\-0-9.eE]+)$"
-    )
     trace = {
         "timestep": [],
         "pre_mean": [],
         "post_mean": [],
         "pre_max": [],
         "post_max": [],
+        "pre_score_norm_mean": [],
+        "post_score_norm_mean": [],
+        "pre_score_norm_max": [],
+        "post_score_norm_max": [],
     }
 
+    reward_pattern = re.compile(
+        r"^\[t=(\d+)\]\s+pre_mean=([\-0-9.eE]+)\s+pre_max=([\-0-9.eE]+)\s+"
+        r"post_mean=([\-0-9.eE]+)\s+post_max=([\-0-9.eE]+)$"
+    )
+    score_pattern = re.compile(
+        r"^\[t=(\d+)\]\s+pre_score_norm_mean=([\-0-9.eE]+)\s+pre_score_norm_max=([\-0-9.eE]+)\s+"
+        r"post_score_norm_mean=([\-0-9.eE]+)\s+post_score_norm_max=([\-0-9.eE]+)$"
+    )
+
     for line in stdout.splitlines():
-        match = pattern.match(line.strip())
-        if not match:
+        match = reward_pattern.match(line.strip())
+        if match:
+            trace["timestep"].append(float(match.group(1)))
+            trace["pre_mean"].append(float(match.group(2)))
+            trace["pre_max"].append(float(match.group(3)))
+            trace["post_mean"].append(float(match.group(4)))
+            trace["post_max"].append(float(match.group(5)))
             continue
-        trace["timestep"].append(float(match.group(1)))
-        trace["pre_mean"].append(float(match.group(2)))
-        trace["pre_max"].append(float(match.group(3)))
-        trace["post_mean"].append(float(match.group(4)))
-        trace["post_max"].append(float(match.group(5)))
+
+        match = score_pattern.match(line.strip())
+        if match:
+            trace["pre_score_norm_mean"].append(float(match.group(2)))
+            trace["pre_score_norm_max"].append(float(match.group(3)))
+            trace["post_score_norm_mean"].append(float(match.group(4)))
+            trace["post_score_norm_max"].append(float(match.group(5)))
 
     return trace
 
@@ -194,6 +210,46 @@ def _plot_reward_trace(
         axes[1].set_title("Reward Max")
         axes[1].set_xlabel("Steered step")
         axes[1].set_ylabel("Reward")
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend()
+
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=160)
+        plt.show(block=block)
+        if not block:
+            plt.pause(0.001)
+        plt.close(fig)
+
+
+def _plot_score_norm_trace(
+    prompt: str,
+    trace: Dict[str, List[float]],
+    run_name: str,
+    device: str,
+    out_path: Path,
+    block: bool,
+) -> None:
+    if not trace["timestep"] or not trace["pre_score_norm_mean"]:
+        return
+
+    x = list(range(1, len(trace["pre_score_norm_mean"]) + 1))
+    with PLOT_LOCK:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+        fig.suptitle(f"{run_name} | {device}\\n{_truncate(prompt, 120)}")
+
+        axes[0].plot(x, trace["pre_score_norm_mean"], label="before_guidance", linewidth=2)
+        axes[0].plot(x, trace["post_score_norm_mean"], label="after_guidance", linewidth=2)
+        axes[0].set_title("Guided Score Norm Mean")
+        axes[0].set_xlabel("Steered step")
+        axes[0].set_ylabel("L2 norm")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend()
+
+        axes[1].plot(x, trace["pre_score_norm_max"], label="before_guidance", linewidth=2)
+        axes[1].plot(x, trace["post_score_norm_max"], label="after_guidance", linewidth=2)
+        axes[1].set_title("Guided Score Norm Max")
+        axes[1].set_xlabel("Steered step")
+        axes[1].set_ylabel("L2 norm")
         axes[1].grid(True, alpha=0.3)
         axes[1].legend()
 
@@ -388,6 +444,7 @@ def _run_prompt_shard(
             print(_c(f"  status: {_c('OK', _Style.GREEN, _Style.BOLD)}  time: {elapsed:.2f}s", _Style.DIM))
             if args.plot_after_run:
                 reward_plot_path = run_output_dir / "reward_trace_before_after.png"
+                score_plot_path = run_output_dir / "guided_score_trace_before_after.png"
                 particle_plot_path = run_output_dir / "particles_grid.png"
                 if trace_data["timestep"]:
                     _plot_reward_trace(
@@ -399,6 +456,16 @@ def _run_prompt_shard(
                         block=args.plot_block,
                     )
                     print(_c(f"  saved: {reward_plot_path}", _Style.DIM))
+                    if trace_data["pre_score_norm_mean"]:
+                        _plot_score_norm_trace(
+                            prompt=prompt,
+                            trace=trace_data,
+                            run_name=run_name,
+                            device=device,
+                            out_path=score_plot_path,
+                            block=args.plot_block,
+                        )
+                        print(_c(f"  saved: {score_plot_path}", _Style.DIM))
                 else:
                     print(_c("  plot: no intermediate reward trace found in stdout.", _Style.YELLOW, _Style.BOLD))
                 _plot_particle_images(
