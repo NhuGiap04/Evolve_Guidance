@@ -89,3 +89,12 @@ fi
   2>&1 | tee "$LOG_FILE"
 
 echo "[INFO] Finished. Full log: $LOG_FILE"
+
+# Run evaluation script on the just-generated batch output
+EVAL_SCRIPT="eval_generated_outputs.py"
+if [ -f "$EVAL_SCRIPT" ]; then
+  echo "[INFO] Running evaluation on $RUN_OUTPUT_DIR"
+  python "$EVAL_SCRIPT" --eval-root "$RUN_OUTPUT_DIR" --device "$DEVICE" --batch-size "$NUM_PARTICLES" --run-diversity
+else
+  echo "[WARN] $EVAL_SCRIPT not found, skipping evaluation."
+fi
