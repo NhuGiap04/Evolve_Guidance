@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs SD DPM batch generation and writes combined stdout/stderr to a timestamped log file.
+# Override defaults via environment variables, e.g.:
+#   PYTHON_BIN=/venv/main/bin/python DEVICE=cuda:1 ./run_sd_batch_dpm_logged.sh
+#   PYTHON_BIN=/venv/main/bin/python DEVICES="cuda:0 cuda:1" ./run_sd_batch_dpm_logged.sh
+
+PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
+BATCH_SCRIPT="${BATCH_SCRIPT:-runs/gradient_sd_batch_dpm.py}"
+PROMPTS_FILE="${PROMPTS_FILE:-prompts/hps_v2_all_eval.txt}"
+OUTPUT_ROOT_DIR="${OUTPUT_DIR:-logs/sd_batch_dpm}"
+CONFIG="${CONFIG:-dpm_pick}"
+EVAL_REWARD="${EVAL_REWARD:-image_reward}"
+DEVICE="${DEVICE:-cuda:1}"
+DEVICES="${DEVICES:-cuda:0 cuda:1}"
+NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
+
+NUM_STEPS="${NUM_STEPS:-30}"
+ETA="${ETA:-0.0}"
+NUM_PARTICLES="${NUM_PARTICLES:-4}"
+BATCH_P="${BATCH_P:-1}"
+STEIN_STEP="${STEIN_STEP:-0.005}"
+STEIN_LOOP="${STEIN_LOOP:-1}"
+STEER_START="${STEER_START:-0}"
+STEER_END="${STEER_END:-30}"
+SAVE_INTERMEDIATE_REWARDS="${SAVE_INTERMEDIATE_REWARDS:-0}"
+PLOT_AFTER_RUN="${PLOT_AFTER_RUN:-1}"
+PLOT_BLOCK="${PLOT_BLOCK:-1}"
+
+SAVE_INTERMEDIATE_REWARDS_ARG=""
+if [[ "$SAVE_INTERMEDIATE_REWARDS" == "1" || "$SAVE_INTERMEDIATE_REWARDS" == "true" ]]; then
+  SAVE_INTERMEDIATE_REWARDS_ARG="--save-intermediate-rewards"
+fi
+
+PLOT_AFTER_RUN_ARG="--plot-after-run"
+if [[ "$PLOT_AFTER_RUN" == "0" || "$PLOT_AFTER_RUN" == "false" ]]; then
+  PLOT_AFTER_RUN_ARG="--no-plot-after-run"
+fi
+
+PLOT_BLOCK_ARG="--plot-block"
+if [[ "$PLOT_BLOCK" == "0" || "$PLOT_BLOCK" == "false" ]]; then
+  PLOT_BLOCK_ARG="--no-plot-block"
+fi
+
+mkdir -p "$OUTPUT_ROOT_DIR"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+RUN_DIR_NAME="${RUN_DIR_NAME:-batch_${TIMESTAMP}_$$}"
+RUN_OUTPUT_DIR="$OUTPUT_ROOT_DIR/$RUN_DIR_NAME"
+mkdir -p "$RUN_OUTPUT_DIR"
+LOG_FILE="$RUN_OUTPUT_DIR/batch.log"
+
+echo "[INFO] Starting batch run"
+echo "[INFO] Output root: $OUTPUT_ROOT_DIR"
+echo "[INFO] Run output: $RUN_OUTPUT_DIR"
+echo "[INFO] Log file: $LOG_FILE"
+
+echo "[INFO] Command:"
+if [[ -n "$DEVICES" ]]; then
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+else
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+fi
+
+device_args=(--device "$DEVICE")
+if [[ -n "$DEVICES" ]]; then
+  # shellcheck disable=SC2206
+  device_list=($DEVICES)
+  device_args=(--devices "${device_list[@]}")
+fi
+
+"$PYTHON_BIN" "$BATCH_SCRIPT" \
+  --prompts-file "$PROMPTS_FILE" \
+  --config "$CONFIG" \
+  --negative-prompt "$NEGATIVE_PROMPT" \
+  --output-dir "$RUN_OUTPUT_DIR" \
+  --eval-reward "$EVAL_REWARD" \
+  "${device_args[@]}" \
+  --num-steps "$NUM_STEPS" \
+  --eta "$ETA" \
+  --num-particles "$NUM_PARTICLES" \
+  --batch-p "$BATCH_P" \
+  --stein-step "$STEIN_STEP" \
+  --stein-loop "$STEIN_LOOP" \
+  --steer-start "$STEER_START" \
+  --steer-end "$STEER_END" \
+  --verbose \
+  "$PLOT_AFTER_RUN_ARG" \
+  "$PLOT_BLOCK_ARG" \
+  ${SAVE_INTERMEDIATE_REWARDS_ARG:+$SAVE_INTERMEDIATE_REWARDS_ARG} \
+  2>&1 | tee "$LOG_FILE"
+
+echo "[INFO] Finished. Full log: $LOG_FILE"
+
+# Run evaluation script on the just-generated batch output
+EVAL_SCRIPT="eval_generated_outputs.py"
+if [ -f "$EVAL_SCRIPT" ]; then
+  echo "[INFO] Running evaluation on $RUN_OUTPUT_DIR"
+  "$PYTHON_BIN" "$EVAL_SCRIPT" --eval-root "$RUN_OUTPUT_DIR" --device "$DEVICE" --batch-size "$NUM_PARTICLES" --run-diversity
+else
+  echo "[WARN] $EVAL_SCRIPT not found, skipping evaluation."
+fi

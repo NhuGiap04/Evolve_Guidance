@@ -25,7 +25,7 @@ def parse_args():
         "--config",
         type=str,
         default="pick",
-        choices=["pick", "clip", "seg"],
+        choices=["pick", "clip", "seg", "dpm_pick", "dpm_clip", "dpm_seg"],
         help="Config preset name from config/sdxl.py.",
     )
     parser.add_argument(

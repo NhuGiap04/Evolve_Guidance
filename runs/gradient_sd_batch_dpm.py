@@ -563,7 +563,12 @@ def parse_args() -> argparse.Namespace:
         default=sys.executable,
         help="Python executable used to launch gradient_sd_dpm.py.",
     )
-    parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="pick",
+        choices=["pick", "clip", "seg", "dpm_pick", "dpm_clip", "dpm_seg"],
+    )
     parser.add_argument("--negative-prompt", type=str, default="")
     parser.add_argument("--output-dir", type=Path, default=Path("logs/sd_batch_dpm"))
     parser.add_argument(
