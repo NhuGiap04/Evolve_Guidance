@@ -794,11 +794,16 @@ def pipeline_using_gradient_sd(
                     prev_t = -1
                     prev_t_int = -1
 
-            alpha_bar_prev = (
-                self.scheduler.alphas_cumprod[prev_t_int]
-                if prev_t_int >= 0
-                else self.scheduler.final_alpha_cumprod
-            )
+            if prev_t_int >= 0:
+                alpha_bar_prev = self.scheduler.alphas_cumprod[prev_t_int]
+            else:
+                final_alpha = getattr(self.scheduler, "final_alpha_cumprod", None)
+                if final_alpha is None:
+                    if hasattr(self.scheduler, "alphas_cumprod") and len(self.scheduler.alphas_cumprod) > 0:
+                        final_alpha = self.scheduler.alphas_cumprod[0]
+                    else:
+                        final_alpha = 1.0
+                alpha_bar_prev = final_alpha
             if not torch.is_tensor(alpha_bar_prev):
                 alpha_bar_prev = torch.tensor(alpha_bar_prev, device=latents.device, dtype=latents.dtype)
             alpha_bar_prev = alpha_bar_prev.to(device=latents.device, dtype=latents.dtype)
