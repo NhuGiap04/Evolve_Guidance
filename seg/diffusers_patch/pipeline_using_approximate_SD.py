@@ -59,6 +59,7 @@ def pipeline_using_approximate_sd(
     x0_anchor_steps: int = 1,
     x0_anchor_lora_path: Optional[str] = None,
     x0_anchor_lora_scale: float = 1.0,
+    detach_reward_anchors: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionPipelineOutput, Tuple]:
     return pipeline_using_gradient_sd(
@@ -106,6 +107,7 @@ def pipeline_using_approximate_sd(
         x0_anchor_steps=x0_anchor_steps,
         x0_anchor_lora_path=x0_anchor_lora_path,
         x0_anchor_lora_scale=x0_anchor_lora_scale,
+        detach_reward_anchors=detach_reward_anchors,
         **kwargs,
     )
 

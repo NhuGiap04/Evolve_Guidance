@@ -135,6 +135,11 @@ def parse_args():
         default=None,
         help="Optional LoRA scale for LCM anchor prediction.",
     )
+    parser.add_argument(
+        "--detach-anchors",
+        action="store_true",
+        help="Detach x0 anchors so reward does not backprop through anchor prediction.",
+    )
 
     parser.add_argument(
         "--save-intermediate-images",
@@ -521,6 +526,15 @@ def main():
     if args.x0_anchor_lora_scale is not None:
         config.sample.x0_anchor_lora_scale = args.x0_anchor_lora_scale
 
+    use_reward_guidance = (
+        config.reward_fn != "none"
+        and config.sample.stein_loop > 0
+        and config.sample.stein_step > 0
+    )
+    if args.offload != "none" and use_reward_guidance:
+        print("[WARN] Offload is not supported with reward gradients; forcing --offload none.")
+        args.offload = "none"
+
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA device requested but CUDA is not available.")
@@ -648,6 +662,7 @@ def main():
         x0_anchor_steps=config.sample.x0_anchor_steps,
         x0_anchor_lora_path=config.sample.x0_anchor_lora_path,
         x0_anchor_lora_scale=config.sample.x0_anchor_lora_scale,
+        detach_reward_anchors=args.detach_anchors,
         return_all_particles=True,
         return_dict=False,
     )

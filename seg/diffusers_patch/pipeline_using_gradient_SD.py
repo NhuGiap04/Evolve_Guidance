@@ -258,6 +258,7 @@ def pipeline_using_gradient_sd(
     x0_anchor_steps: int = 1,
     x0_anchor_lora_path: Optional[str] = None,
     x0_anchor_lora_scale: float = 1.0,
+    detach_reward_anchors: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionPipelineOutput, Tuple]:
     """Run SD denoising with optional Stein particle transport guidance."""
@@ -762,6 +763,8 @@ def pipeline_using_gradient_sd(
 
             with torch.no_grad():
                 pred_x0_chunk = _predict_x0_anchor(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
+                if detach_reward_anchors:
+                    pred_x0_chunk = pred_x0_chunk.detach()
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 
@@ -790,6 +793,8 @@ def pipeline_using_gradient_sd(
 
             with torch.enable_grad():
                 pred_x0_chunk = _predict_x0_anchor(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
+                if detach_reward_anchors:
+                    pred_x0_chunk = pred_x0_chunk.detach()
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 

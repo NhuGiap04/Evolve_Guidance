@@ -397,6 +397,15 @@ def main():
     if args.x0_anchor_lora_scale is not None:
         config.sample.x0_anchor_lora_scale = args.x0_anchor_lora_scale
 
+    use_reward_guidance = (
+        config.reward_fn != "none"
+        and config.sample.stein_loop > 0
+        and config.sample.stein_step > 0
+    )
+    if args.offload != "none" and use_reward_guidance:
+        print("[WARN] Offload is not supported with reward gradients; forcing --offload none.")
+        args.offload = "none"
+
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA device requested but CUDA is not available.")
