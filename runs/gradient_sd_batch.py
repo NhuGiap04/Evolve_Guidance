@@ -335,6 +335,8 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, d
     _append_optional_arg(cmd, "--reward-scale-fixed", args.reward_scale_fixed)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
+    if args.offload and args.offload != "none":
+        _append_optional_arg(cmd, "--offload", args.offload)
     _append_optional_arg(cmd, "--x0-anchor-model", args.x0_anchor_model)
     _append_optional_arg(cmd, "--x0-anchor-steps", args.x0_anchor_steps)
     _append_optional_arg(cmd, "--x0-anchor-lora-path", args.x0_anchor_lora_path)
@@ -577,6 +579,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="image_reward",
         choices=["none", "clip", "pick", "image_reward"],
+    )
+    parser.add_argument(
+        "--offload",
+        type=str,
+        default="none",
+        choices=["none", "model", "sequential"],
+        help="Enable CPU offload to reduce VRAM (requires accelerate).",
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument(

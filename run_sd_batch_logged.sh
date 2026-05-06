@@ -15,6 +15,7 @@ EVAL_REWARD="${EVAL_REWARD:-image_reward}"
 DEVICE="${DEVICE:-cuda:1}"
 DEVICES="${DEVICES:-cuda:0 cuda:1}"
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
+OFFLOAD="${OFFLOAD:-model}"
 
 NUM_STEPS="${NUM_STEPS:-100}"
 NUM_PARTICLES="${NUM_PARTICLES:-4}"
@@ -99,9 +100,9 @@ if [[ -n "$STEIN_BANDWIDTH" ]]; then
   stein_bandwidth_args=(--stein-bandwidth "$STEIN_BANDWIDTH")
 fi
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -117,6 +118,7 @@ python "$BATCH_SCRIPT" \
   --negative-prompt "$NEGATIVE_PROMPT" \
   --output-dir "$RUN_OUTPUT_DIR" \
   --eval-reward "$EVAL_REWARD" \
+  --offload "$OFFLOAD" \
   "${device_args[@]}" \
   --num-steps "$NUM_STEPS" \
   --num-particles "$NUM_PARTICLES" \

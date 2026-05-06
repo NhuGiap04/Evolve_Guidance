@@ -12,7 +12,7 @@ from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
 
 from config.sdxl import get_config
-from seg.diffusers_patch.pipeline_using_gradient_SDXL import pipeline_using_gradient_sdxl
+from seg.diffusers_patch.pipeline_using_approximate_SDXL import pipeline_using_approximate_sdxl
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
@@ -20,7 +20,7 @@ from seg.scorers.clip_scorer import CLIPScorer
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL Stein-guided sampling with per-step reward traces and plots."
+        description="Approximate SDXL Stein-guided sampling with per-step reward traces and plots."
     )
     parser.add_argument(
         "--config",
@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="logs/sdxl",
+        default="logs/sdxl_approx",
         help="Directory for generated images, traces, and plots.",
     )
     parser.add_argument(
@@ -301,37 +301,156 @@ def _save_intermediate_step_images(
     decode_batch_size,
     intermediate_max_samples,
 ):
-    if decode_batch_size < 1:
-        decode_batch_size = 1
+    step_count = len(step_latents_cpu_list)
+    for step_idx, latents_cpu in enumerate(step_latents_cpu_list):
+        if intermediate_max_samples is not None:
+            latents_cpu = latents_cpu[:intermediate_max_samples]
 
-    sample_cap = None
-    if intermediate_max_samples is not None:
-        sample_cap = max(intermediate_max_samples, 0)
+        print(f"[INFO] Decoding step {step_idx + 1}/{step_count} ({latents_cpu.shape[0]} samples)")
+        with torch.no_grad():
+            step_scores, _ = _score_latents_in_batches(
+                pipe,
+                latents_cpu,
+                [prompt] * latents_cpu.shape[0],
+                steer_scorer,
+                None,
+                decode_batch_size,
+                device,
+                inference_dtype,
+            )
 
-    for step_idx, step_latents_cpu in enumerate(step_latents_cpu_list, start=1):
-        if sample_cap == 0:
-            continue
+            images = decode_latents_sdxl(pipe, latents_cpu.to(device=device, dtype=inference_dtype))
 
-        limit = step_latents_cpu.shape[0] if sample_cap is None else min(step_latents_cpu.shape[0], sample_cap)
+        step_dir = intermediate_out_dir / f"step_{step_idx:03d}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(images.shape[0]):
+            img_path = step_dir / f"sample_{i:02d}.png"
+            save_tensor_image(images[i], img_path)
 
-        for offset in range(0, limit, decode_batch_size):
-            chunk = step_latents_cpu[offset : min(limit, offset + decode_batch_size)]
-            with torch.inference_mode():
-                chunk_latents = chunk.to(device=device, dtype=inference_dtype)
-                chunk_images = decode_latents_sdxl(pipe, chunk_latents)
-                chunk_prompts = [prompt] * chunk_images.shape[0]
-                chunk_scores = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
-                for local_idx, image in enumerate(chunk_images):
-                    sample_idx = offset + local_idx
-                    steer_score = float(chunk_scores[local_idx].item())
-                    file_name = (
-                        f"step_{step_idx:03d}_sample_{sample_idx:03d}"
-                        f"_steer_{steer_score:.6f}.png"
-                    )
-                    save_tensor_image(image, intermediate_out_dir / file_name)
+        scores_path = step_dir / "reward_scores.csv"
+        with scores_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["sample_index", "reward"])
+            for i, score in enumerate(step_scores.tolist()):
+                writer.writerow([i, f"{score:.6f}"])
 
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+
+def _save_intermediate_step_rewards(
+    trace_entries,
+    out_dir,
+    prompt,
+    steer_scorer,
+    eval_scorer,
+    pipe,
+    device,
+    inference_dtype,
+    batch_size,
+):
+    if not trace_entries:
+        return
+
+    trace_dir = out_dir / "trace"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+
+    step_ids = []
+    pre_rewards = []
+    post_rewards = []
+    pre_eval_rewards = []
+    post_eval_rewards = []
+
+    for entry in trace_entries:
+        step_idx = entry["step_index"]
+        t_value = entry["timestep"]
+        step_ids.append(step_idx)
+
+        pre_latents = entry["pre_x0_latents_cpu"]
+        post_latents = entry["post_x0_latents_cpu"]
+
+        pre_scores, pre_eval_scores = _score_latents_in_batches(
+            pipe,
+            pre_latents,
+            [prompt] * pre_latents.shape[0],
+            steer_scorer,
+            eval_scorer,
+            batch_size,
+            device,
+            inference_dtype,
+        )
+        post_scores, post_eval_scores = _score_latents_in_batches(
+            pipe,
+            post_latents,
+            [prompt] * post_latents.shape[0],
+            steer_scorer,
+            eval_scorer,
+            batch_size,
+            device,
+            inference_dtype,
+        )
+
+        pre_rewards.append(pre_scores)
+        post_rewards.append(post_scores)
+        if eval_scorer is not None:
+            pre_eval_rewards.append(pre_eval_scores)
+            post_eval_rewards.append(post_eval_scores)
+
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    steered_trace_path = out_dir / "steer_trace.csv"
+    with steered_trace_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["step_index", "timestep", "pre_reward", "post_reward"])
+        for idx, entry in enumerate(trace_entries):
+            pre_mean = pre_rewards[idx].mean().item() if pre_rewards[idx].numel() else 0.0
+            post_mean = post_rewards[idx].mean().item() if post_rewards[idx].numel() else 0.0
+            writer.writerow([entry["step_index"], entry["timestep"], f"{pre_mean:.6f}", f"{post_mean:.6f}"])
+
+    save_before_after_plot(
+        step_ids,
+        [scores.mean().item() for scores in pre_rewards],
+        [scores.mean().item() for scores in post_rewards],
+        title=f"Steer reward mean | {prompt}",
+        ylabel="Reward",
+        out_path=out_dir / "steer_before_after_mean.png",
+    )
+    save_before_after_plot(
+        step_ids,
+        [scores.max().item() for scores in pre_rewards],
+        [scores.max().item() for scores in post_rewards],
+        title=f"Steer reward max | {prompt}",
+        ylabel="Reward",
+        out_path=out_dir / "steer_before_after_max.png",
+    )
+
+    if eval_scorer is not None and pre_eval_rewards:
+        eval_trace_path = out_dir / "eval_trace.csv"
+        with eval_trace_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["step_index", "timestep", "pre_eval", "post_eval"])
+            for idx, entry in enumerate(trace_entries):
+                pre_mean = pre_eval_rewards[idx].mean().item() if pre_eval_rewards[idx].numel() else 0.0
+                post_mean = post_eval_rewards[idx].mean().item() if post_eval_rewards[idx].numel() else 0.0
+                writer.writerow([entry["step_index"], entry["timestep"], f"{pre_mean:.6f}", f"{post_mean:.6f}"])
+
+        save_before_after_plot(
+            step_ids,
+            [scores.mean().item() for scores in pre_eval_rewards],
+            [scores.mean().item() for scores in post_eval_rewards],
+            title=f"Eval reward mean | {prompt}",
+            ylabel="Reward",
+            out_path=out_dir / "eval_before_after_mean.png",
+        )
+        save_before_after_plot(
+            step_ids,
+            [scores.max().item() for scores in pre_eval_rewards],
+            [scores.max().item() for scores in post_eval_rewards],
+            title=f"Eval reward max | {prompt}",
+            ylabel="Reward",
+            out_path=out_dir / "eval_before_after_max.png",
+        )
 
 
 def release_generation_modules(pipe):
@@ -391,8 +510,12 @@ def main():
         config.sample.steer_end = args.steer_end
     if args.x0_anchor_model is not None:
         config.sample.x0_anchor_model = args.x0_anchor_model
+    else:
+        config.sample.x0_anchor_model = "dpm"
     if args.x0_anchor_steps is not None:
         config.sample.x0_anchor_steps = args.x0_anchor_steps
+    elif config.sample.x0_anchor_model == "dpm" and config.sample.x0_anchor_steps < 2:
+        config.sample.x0_anchor_steps = 2
     if args.x0_anchor_lora_path is not None:
         config.sample.x0_anchor_lora_path = args.x0_anchor_lora_path
     if args.x0_anchor_lora_scale is not None:
@@ -417,6 +540,7 @@ def main():
             lora_url = "https://huggingface.co/tianweiy/DMD2/resolve/main/dmd2_sdxl_4step_lora.safetensors"
         _download_lora_if_missing(lora_url, lora_file)
         config.sample.x0_anchor_lora_path = str(lora_file)
+
     load_kwargs = {"torch_dtype": inference_dtype, "use_safetensors": True}
     if inference_dtype == torch.float16:
         load_kwargs["variant"] = "fp16"
@@ -533,7 +657,7 @@ def main():
 
     inference_start = time.time()
     with torch.no_grad():
-        result = pipeline_using_gradient_sdxl(pipe, **call_kwargs)
+        result = pipeline_using_approximate_sdxl(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
     pipeline_trace_data = None
@@ -598,308 +722,56 @@ def main():
             "max": float(final_eval_scores.max().item()),
             "min": float(final_eval_scores.min().item()),
         }
-    else:
-        final_rewards_payload["eval_reward_name"] = "none"
-        final_rewards_payload["eval_rewards"] = None
-        final_rewards_payload["eval_reward_stats"] = None
 
     final_rewards_path = out_dir / "final_rewards.json"
-    with final_rewards_path.open("w", encoding="utf-8") as f:
-        json.dump(final_rewards_payload, f, indent=2)
+    with final_rewards_path.open("w", encoding="utf-8") as handle:
+        json.dump(final_rewards_payload, handle, indent=2)
 
-    if args.save_intermediate_rewards and not args.run_eval_now and len(trace_entries) > 0:
-        deferred_trace_path = out_dir / "steer_trace_latents.pt"
-        torch.save(trace_entries, deferred_trace_path)
-        print(f"Saved deferred trace latents to: {deferred_trace_path}")
-
-    if args.save_intermediate_rewards and pipeline_trace_data is not None:
-        guided_score_rows = []
-        guided_score_mean_before = []
-        guided_score_mean_after = []
-        guided_score_max_before = []
-        guided_score_max_after = []
-
-        pre_score_norm_mean_trace = pipeline_trace_data.get("pre_score_norm_mean", [])
-        pre_score_norm_max_trace = pipeline_trace_data.get("pre_score_norm_max", [])
-        post_score_norm_mean_trace = pipeline_trace_data.get("post_score_norm_mean", [])
-        post_score_norm_max_trace = pipeline_trace_data.get("post_score_norm_max", [])
-
-        for trace_idx, trace in enumerate(trace_entries):
-            if trace_idx >= len(pre_score_norm_mean_trace):
-                break
-
-            row = {
-                "step_index": int(trace["step_index"]),
-                "timestep": int(trace["timestep"]),
-                "pre_score_norm_mean": float(pre_score_norm_mean_trace[trace_idx]),
-                "post_score_norm_mean": float(post_score_norm_mean_trace[trace_idx]),
-                "pre_score_norm_max": float(pre_score_norm_max_trace[trace_idx]),
-                "post_score_norm_max": float(post_score_norm_max_trace[trace_idx]),
-            }
-            guided_score_rows.append(row)
-            guided_score_mean_before.append(row["pre_score_norm_mean"])
-            guided_score_mean_after.append(row["post_score_norm_mean"])
-            guided_score_max_before.append(row["pre_score_norm_max"])
-            guided_score_max_after.append(row["post_score_norm_max"])
-
-        if guided_score_rows:
-            guided_score_csv_path = out_dir / "guided_score_trace.csv"
-            with guided_score_csv_path.open("w", encoding="utf-8", newline="") as guided_score_file:
-                writer = csv.DictWriter(
-                    guided_score_file,
-                    fieldnames=[
-                        "step_index",
-                        "timestep",
-                        "pre_score_norm_mean",
-                        "post_score_norm_mean",
-                        "pre_score_norm_max",
-                        "post_score_norm_max",
-                    ],
-                )
-                writer.writeheader()
-                for row in guided_score_rows:
-                    writer.writerow(row)
-
-            plot_x = list(range(1, len(guided_score_rows) + 1))
-            save_before_after_plot(
-                plot_x,
-                guided_score_mean_before,
-                guided_score_mean_after,
-                title="Before/After guided score norm - mean",
-                ylabel="L2 norm",
-                out_path=out_dir / "guided_score_before_after_mean.png",
-            )
-            save_before_after_plot(
-                plot_x,
-                guided_score_max_before,
-                guided_score_max_after,
-                title="Before/After guided score norm - max",
-                ylabel="L2 norm",
-                out_path=out_dir / "guided_score_before_after_max.png",
-            )
-            print(f"Saved guided score norm trace to: {guided_score_csv_path}")
-
-    if args.save_intermediate_rewards and args.run_eval_now:
-        # 3) Deferred intermediate reward evaluation in trace-eval micro-batches.
-        trace_rows = []
-        pre_steer_mean = []
-        post_steer_mean = []
-        pre_steer_max = []
-        post_steer_max = []
-        pre_score_norm_mean = []
-        post_score_norm_mean = []
-        pre_score_norm_max = []
-        post_score_norm_max = []
-        pre_eval_mean = []
-        post_eval_mean = []
-        pre_eval_max = []
-        post_eval_max = []
-
-        score_norm_trace = pipeline_trace_data or {}
-        pre_score_norm_mean_trace = score_norm_trace.get("pre_score_norm_mean", [])
-        post_score_norm_mean_trace = score_norm_trace.get("post_score_norm_mean", [])
-        pre_score_norm_max_trace = score_norm_trace.get("pre_score_norm_max", [])
-        post_score_norm_max_trace = score_norm_trace.get("post_score_norm_max", [])
-
-        for trace_idx, trace in enumerate(trace_entries):
-            trace_prompts = prompt_particles[: trace["pre_x0_latents_cpu"].shape[0]]
-            if len(trace_prompts) != trace["pre_x0_latents_cpu"].shape[0]:
-                trace_prompts = [args.prompt] * trace["pre_x0_latents_cpu"].shape[0]
-
-            pre_steer_scores, pre_eval_scores = _score_latents_in_batches(
-                pipe=pipe,
-                latents_cpu=trace["pre_x0_latents_cpu"],
-                prompts=trace_prompts,
-                steer_scorer=steer_scorer,
-                eval_scorer=eval_scorer,
-                batch_size=args.trace_eval_batch,
-                device=device,
-                inference_dtype=inference_dtype,
-            )
-            post_steer_scores, post_eval_scores = _score_latents_in_batches(
-                pipe=pipe,
-                latents_cpu=trace["post_x0_latents_cpu"],
-                prompts=trace_prompts,
-                steer_scorer=steer_scorer,
-                eval_scorer=eval_scorer,
-                batch_size=args.trace_eval_batch,
-                device=device,
-                inference_dtype=inference_dtype,
-            )
-
-            row = {
-                "step_index": int(trace["step_index"]),
-                "timestep": int(trace["timestep"]),
-                "pre_steer_mean": float(pre_steer_scores.mean().item()),
-                "post_steer_mean": float(post_steer_scores.mean().item()),
-                "pre_steer_max": float(pre_steer_scores.max().item()),
-                "post_steer_max": float(post_steer_scores.max().item()),
-            }
-
-            if trace_idx < len(pre_score_norm_mean_trace):
-                row["pre_score_norm_mean"] = float(pre_score_norm_mean_trace[trace_idx])
-                row["post_score_norm_mean"] = float(post_score_norm_mean_trace[trace_idx])
-                row["pre_score_norm_max"] = float(pre_score_norm_max_trace[trace_idx])
-                row["post_score_norm_max"] = float(post_score_norm_max_trace[trace_idx])
-                pre_score_norm_mean.append(row["pre_score_norm_mean"])
-                post_score_norm_mean.append(row["post_score_norm_mean"])
-                pre_score_norm_max.append(row["pre_score_norm_max"])
-                post_score_norm_max.append(row["post_score_norm_max"])
-
-            if eval_scorer is not None and pre_eval_scores is not None and post_eval_scores is not None:
-                row["pre_eval_mean"] = float(pre_eval_scores.mean().item())
-                row["post_eval_mean"] = float(post_eval_scores.mean().item())
-                row["pre_eval_max"] = float(pre_eval_scores.max().item())
-                row["post_eval_max"] = float(post_eval_scores.max().item())
-
-            trace_rows.append(row)
-
-            pre_steer_mean.append(row["pre_steer_mean"])
-            post_steer_mean.append(row["post_steer_mean"])
-            pre_steer_max.append(row["pre_steer_max"])
-            post_steer_max.append(row["post_steer_max"])
-
-            print(
-                f"[steer step {row['step_index']:03d} | t={row['timestep']:04d}] "
-                f"mean: {row['pre_steer_mean']:.6f} -> {row['post_steer_mean']:.6f} "
-                f"(delta={row['post_steer_mean'] - row['pre_steer_mean']:+.6f}) | "
-                f"max: {row['pre_steer_max']:.6f} -> {row['post_steer_max']:.6f} "
-                f"(delta={row['post_steer_max'] - row['pre_steer_max']:+.6f})"
-            )
-
-            if "pre_score_norm_mean" in row:
-                print(
-                    f"[score step {row['step_index']:03d} | t={row['timestep']:04d}] "
-                    f"mean-norm: {row['pre_score_norm_mean']:.6f} -> {row['post_score_norm_mean']:.6f} "
-                    f"(delta={row['post_score_norm_mean'] - row['pre_score_norm_mean']:+.6f}) | "
-                    f"max-norm: {row['pre_score_norm_max']:.6f} -> {row['post_score_norm_max']:.6f} "
-                    f"(delta={row['post_score_norm_max'] - row['pre_score_norm_max']:+.6f})"
-                )
-
-            if "pre_eval_mean" in row:
-                pre_eval_mean.append(row["pre_eval_mean"])
-                post_eval_mean.append(row["post_eval_mean"])
-                pre_eval_max.append(row["pre_eval_max"])
-                post_eval_max.append(row["post_eval_max"])
-                print(
-                    f"[eval  step {row['step_index']:03d} | t={row['timestep']:04d}] "
-                    f"mean: {row['pre_eval_mean']:.6f} -> {row['post_eval_mean']:.6f} "
-                    f"(delta={row['post_eval_mean'] - row['pre_eval_mean']:+.6f}) | "
-                    f"max: {row['pre_eval_max']:.6f} -> {row['post_eval_max']:.6f} "
-                    f"(delta={row['post_eval_max'] - row['pre_eval_max']:+.6f})"
-                )
-
-        # 4) Save combined trace CSV and before/after plots.
-        trace_csv_path = out_dir / "steer_trace.csv"
-        with trace_csv_path.open("w", encoding="utf-8", newline="") as trace_file:
-            fieldnames = [
-                "step_index",
-                "timestep",
-                "pre_steer_mean",
-                "post_steer_mean",
-                "pre_steer_max",
-                "post_steer_max",
-            ]
-            if len(pre_score_norm_mean) == len(trace_rows):
-                fieldnames.extend(
-                    [
-                        "pre_score_norm_mean",
-                        "post_score_norm_mean",
-                        "pre_score_norm_max",
-                        "post_score_norm_max",
-                    ]
-                )
-            if eval_scorer is not None:
-                fieldnames.extend(["pre_eval_mean", "post_eval_mean", "pre_eval_max", "post_eval_max"])
-
-            writer = csv.DictWriter(trace_file, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in trace_rows:
-                writer.writerow(row)
-
-        if len(trace_rows) > 0:
-            plot_x = list(range(1, len(trace_rows) + 1))
-            save_before_after_plot(
-                plot_x,
-                pre_steer_mean,
-                post_steer_mean,
-                title=f"Before/After steering reward ({config.reward_fn}) - mean",
-                ylabel="Reward",
-                out_path=out_dir / "steer_before_after_mean.png",
-            )
-            save_before_after_plot(
-                plot_x,
-                pre_steer_max,
-                post_steer_max,
-                title=f"Before/After steering reward ({config.reward_fn}) - max",
-                ylabel="Reward",
-                out_path=out_dir / "steer_before_after_max.png",
-            )
-
-            if eval_scorer is not None and len(pre_eval_mean) == len(trace_rows):
-                save_before_after_plot(
-                    plot_x,
-                    pre_eval_mean,
-                    post_eval_mean,
-                    title=f"Before/After eval reward ({args.eval_reward}) - mean",
-                    ylabel="Reward",
-                    out_path=out_dir / "eval_before_after_mean.png",
-                )
-                save_before_after_plot(
-                    plot_x,
-                    pre_eval_max,
-                    post_eval_max,
-                    title=f"Before/After eval reward ({args.eval_reward}) - max",
-                    ylabel="Reward",
-                    out_path=out_dir / "eval_before_after_max.png",
-                )
-
-            if len(pre_score_norm_mean) == len(trace_rows):
-                save_before_after_plot(
-                    plot_x,
-                    pre_score_norm_mean,
-                    post_score_norm_mean,
-                    title="Before/After guided score norm - mean",
-                    ylabel="L2 norm",
-                    out_path=out_dir / "guided_score_before_after_mean.png",
-                )
-                save_before_after_plot(
-                    plot_x,
-                    pre_score_norm_max,
-                    post_score_norm_max,
-                    title="Before/After guided score norm - max",
-                    ylabel="L2 norm",
-                    out_path=out_dir / "guided_score_before_after_max.png",
-                )
-
-    if args.save_intermediate_images and len(step_latents_for_images) > 0:
+    if args.save_intermediate_images:
         _save_intermediate_step_images(
-            step_latents_cpu_list=step_latents_for_images,
-            intermediate_out_dir=intermediate_out_dir,
-            pipe=pipe,
-            steer_scorer=steer_scorer,
-            prompt=args.prompt,
-            device=device,
-            inference_dtype=inference_dtype,
-            decode_batch_size=args.trace_decode_batch_size,
-            intermediate_max_samples=args.intermediate_max_samples,
+            step_latents_for_images,
+            intermediate_out_dir,
+            pipe,
+            steer_scorer,
+            args.prompt,
+            device,
+            inference_dtype,
+            args.trace_decode_batch_size,
+            args.intermediate_max_samples,
         )
 
-    if final_eval_scores is not None:
-        print(
-            f"Final eval reward stats ({args.eval_reward}): "
-            f"mean={final_eval_scores.mean().item():.6f} max={final_eval_scores.max().item():.6f}"
+    if args.save_intermediate_rewards:
+        _save_intermediate_step_rewards(
+            trace_entries,
+            out_dir,
+            args.prompt,
+            steer_scorer,
+            eval_scorer,
+            pipe,
+            device,
+            inference_dtype,
+            args.trace_eval_batch,
         )
 
-    print("Saved outputs to:", out_dir)
-    print(f"Inference time (pipeline only): {inference_elapsed:.4f}s")
+    print("\nFinal steering reward stats:")
     if final_steer_scores is not None:
         print(
-            "Final steering reward stats: "
-            f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"
+            f"  mean={final_steer_scores.mean().item():.6f} "
+            f"max={final_steer_scores.max().item():.6f} "
+            f"min={final_steer_scores.min().item():.6f}"
         )
     else:
-        print("Post-generation evaluation deferred. Run a separate evaluator on saved outputs.")
+        print("  (no steering reward stats available)")
+
+    if final_eval_scores is not None:
+        print("\nFinal eval reward stats:")
+        print(
+            f"  mean={final_eval_scores.mean().item():.6f} "
+            f"max={final_eval_scores.max().item():.6f} "
+            f"min={final_eval_scores.min().item():.6f}"
+        )
+
+    return pipeline_trace_data
 
 
 if __name__ == "__main__":

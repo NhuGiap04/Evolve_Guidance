@@ -1,0 +1,113 @@
+"""Local Stable Diffusion pipeline entry point with approximate Stein guidance."""
+
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+    StableDiffusionPipeline,
+    StableDiffusionPipelineOutput,
+)
+
+from seg.diffusers_patch.pipeline_using_gradient_SD import pipeline_using_gradient_sd
+
+
+# Note: this wrapper defaults to anchor-based approximation (DPM) while keeping Stein guidance.
+# It reuses the core implementation from the gradient pipeline.
+
+def pipeline_using_approximate_sd(
+    self: StableDiffusionPipeline,
+    prompt: Optional[Union[str, List[str]]] = None,
+    height: Optional[int] = None,
+    width: Optional[int] = None,
+    num_inference_steps: int = 50,
+    timesteps: Optional[List[int]] = None,
+    sigmas: Optional[List[float]] = None,
+    guidance_scale: float = 7.5,
+    negative_prompt: Optional[Union[str, List[str]]] = None,
+    num_images_per_prompt: int = 1,
+    eta: float = 0.0,
+    generator: Optional[Union["torch.Generator", List["torch.Generator"]]] = None,
+    latents: Optional["torch.Tensor"] = None,
+    prompt_embeds: Optional["torch.Tensor"] = None,
+    negative_prompt_embeds: Optional["torch.Tensor"] = None,
+    ip_adapter_image: Optional[Any] = None,
+    ip_adapter_image_embeds: Optional[List["torch.Tensor"]] = None,
+    output_type: str = "pil",
+    return_dict: bool = True,
+    cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+    guidance_rescale: float = 0.0,
+    clip_skip: Optional[int] = None,
+    callback_on_step_end: Optional[Callable[..., Optional[Dict[str, "torch.Tensor"]]]] = None,
+    callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+    # Stein parameters
+    num_particles: int = 4,
+    batch_p: int = 1,
+    reward_fn: Optional[Callable[["torch.Tensor", List[str]], "torch.Tensor"]] = None,
+    stein_step: float = 0.05,
+    stein_loop: int = 1,
+    stein_kernel: str = "rbf",
+    stein_bandwidth: str = "median",
+    stein_adagrad_eps: float = 1e-8,
+    stein_adagrad_clip: Optional[Tuple[float, float]] = None,
+    kl_coeff: float = 0.0001,
+    reward_guidance_rho: float = 0.05,
+    reward_scale_fixed: Optional[float] = None,
+    steer_start: Optional[int] = None,
+    steer_end: Optional[int] = None,
+    return_all_particles: bool = True,
+    intermediate_rewards: bool = False,
+    x0_anchor_model: str = "dpm",
+    x0_anchor_steps: int = 1,
+    x0_anchor_lora_path: Optional[str] = None,
+    x0_anchor_lora_scale: float = 1.0,
+    **kwargs,
+) -> Union[StableDiffusionPipelineOutput, Tuple]:
+    return pipeline_using_gradient_sd(
+        self,
+        prompt=prompt,
+        height=height,
+        width=width,
+        num_inference_steps=num_inference_steps,
+        timesteps=timesteps,
+        sigmas=sigmas,
+        guidance_scale=guidance_scale,
+        negative_prompt=negative_prompt,
+        num_images_per_prompt=num_images_per_prompt,
+        eta=eta,
+        generator=generator,
+        latents=latents,
+        prompt_embeds=prompt_embeds,
+        negative_prompt_embeds=negative_prompt_embeds,
+        ip_adapter_image=ip_adapter_image,
+        ip_adapter_image_embeds=ip_adapter_image_embeds,
+        output_type=output_type,
+        return_dict=return_dict,
+        cross_attention_kwargs=cross_attention_kwargs,
+        guidance_rescale=guidance_rescale,
+        clip_skip=clip_skip,
+        callback_on_step_end=callback_on_step_end,
+        callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
+        num_particles=num_particles,
+        batch_p=batch_p,
+        reward_fn=reward_fn,
+        stein_step=stein_step,
+        stein_loop=stein_loop,
+        stein_kernel=stein_kernel,
+        stein_bandwidth=stein_bandwidth,
+        stein_adagrad_eps=stein_adagrad_eps,
+        stein_adagrad_clip=stein_adagrad_clip,
+        kl_coeff=kl_coeff,
+        reward_guidance_rho=reward_guidance_rho,
+        reward_scale_fixed=reward_scale_fixed,
+        steer_start=steer_start,
+        steer_end=steer_end,
+        return_all_particles=return_all_particles,
+        intermediate_rewards=intermediate_rewards,
+        x0_anchor_model=x0_anchor_model,
+        x0_anchor_steps=x0_anchor_steps,
+        x0_anchor_lora_path=x0_anchor_lora_path,
+        x0_anchor_lora_scale=x0_anchor_lora_scale,
+        **kwargs,
+    )
+
+
+__all__ = ["pipeline_using_approximate_sd"]

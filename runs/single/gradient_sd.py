@@ -64,6 +64,13 @@ def parse_args():
         default="cuda",
         help="Device to run on, e.g. cuda or cpu.",
     )
+    parser.add_argument(
+        "--offload",
+        type=str,
+        default="none",
+        choices=["none", "model", "sequential"],
+        help="Enable CPU offload to reduce VRAM (requires accelerate).",
+    )
 
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
     parser.add_argument("--num-steps", type=int, default=None, help="Optional num inference steps override.")
@@ -404,7 +411,15 @@ def main():
         config.pretrained.model,
         revision=config.pretrained.revision,
         **load_kwargs,
-    ).to(device)
+    )
+    if args.offload != "none" and device.type != "cuda":
+        raise ValueError("CPU offload requires CUDA device.")
+    if args.offload == "model":
+        pipe.enable_model_cpu_offload()
+    elif args.offload == "sequential":
+        pipe.enable_sequential_cpu_offload()
+    else:
+        pipe = pipe.to(device)
     pipe.safety_checker = None
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
