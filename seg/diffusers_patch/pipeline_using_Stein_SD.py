@@ -82,6 +82,13 @@ def _expand_prompts_for_particles(
 
 
 def _decode_latents_for_reward(pipe: StableDiffusionPipeline, latents: torch.Tensor) -> torch.Tensor:
+    vae_param = next(iter(pipe.vae.parameters()))
+    vae_device = vae_param.device
+    moved_vae = False
+    if vae_device != latents.device:
+        pipe.vae.to(latents.device)
+        moved_vae = True
+
     latents = latents.to(pipe.vae.dtype)
 
     has_latents_mean = hasattr(pipe.vae.config, "latents_mean") and pipe.vae.config.latents_mean is not None
@@ -95,6 +102,8 @@ def _decode_latents_for_reward(pipe: StableDiffusionPipeline, latents: torch.Ten
 
     image = pipe.vae.decode(latents, return_dict=False)[0]
     image = (image / 2 + 0.5).clamp(0, 1)
+    if moved_vae:
+        pipe.vae.to(vae_device)
     return image
 
 

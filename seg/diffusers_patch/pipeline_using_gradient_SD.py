@@ -84,6 +84,12 @@ def _expand_prompts_for_particles(
 
 def _decode_latents_for_reward(pipe: StableDiffusionPipeline, latents: torch.Tensor) -> torch.Tensor:
     # Decode latent tensor to [0, 1] image tensor while preserving grad flow.
+    vae_param = next(iter(pipe.vae.parameters()))
+    vae_device = vae_param.device
+    moved_vae = False
+    if vae_device != latents.device:
+        pipe.vae.to(latents.device)
+        moved_vae = True
     needs_upcasting = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
 
     if needs_upcasting:
@@ -105,6 +111,8 @@ def _decode_latents_for_reward(pipe: StableDiffusionPipeline, latents: torch.Ten
 
     if needs_upcasting:
         pipe.vae.to(dtype=torch.float16)
+    if moved_vae:
+        pipe.vae.to(vae_device)
 
     return (image / 2 + 0.5).clamp(0, 1)
 
