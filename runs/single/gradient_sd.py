@@ -76,6 +76,13 @@ def parse_args():
     parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
     parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
+    parser.add_argument(
+        "--stein-bandwidth",
+        type=str,
+        default=None,
+        choices=["median", "sigma_t"],
+        help="Stein RBF bandwidth selection.",
+    )
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
@@ -335,6 +342,8 @@ def main():
         config.sample.stein_loop = args.stein_loop
     if args.stein_kernel is not None:
         config.sample.stein_kernel = args.stein_kernel
+    if args.stein_bandwidth is not None:
+        config.sample.stein_bandwidth = args.stein_bandwidth
     if args.stein_adagrad_eps is not None:
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
@@ -443,6 +452,7 @@ def main():
         stein_step=config.sample.stein_step,
         stein_loop=config.sample.stein_loop,
         stein_kernel=config.sample.stein_kernel,
+        stein_bandwidth=config.sample.stein_bandwidth,
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,

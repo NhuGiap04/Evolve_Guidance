@@ -37,6 +37,7 @@ def general():
     # batch size (per GPU!) to use for sampling.
     sample.batch_size = 1
     sample.reward_scale_fixed = None
+    sample.stein_bandwidth = "median"
 
     ###### Pretrained Model ######
     config.pretrained = pretrained = ml_collections.ConfigDict()

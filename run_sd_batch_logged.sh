@@ -21,6 +21,7 @@ NUM_PARTICLES="${NUM_PARTICLES:-4}"
 BATCH_P="${BATCH_P:-1}"
 STEIN_STEP="${STEIN_STEP:-0.005}"
 STEIN_LOOP="${STEIN_LOOP:-1}"
+STEIN_BANDWIDTH="${STEIN_BANDWIDTH:-}"
 STEER_START="${STEER_START:-0}"
 STEER_END="${STEER_END:-30}"
 REWARD_SCALE_FIXED="${REWARD_SCALE_FIXED:-}"
@@ -59,10 +60,14 @@ reward_scale_fixed_args=()
 if [[ -n "$REWARD_SCALE_FIXED" ]]; then
   reward_scale_fixed_args=(--reward-scale-fixed "$REWARD_SCALE_FIXED")
 fi
+stein_bandwidth_args=()
+if [[ -n "$STEIN_BANDWIDTH" ]]; then
+  stein_bandwidth_args=(--stein-bandwidth "$STEIN_BANDWIDTH")
+fi
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -84,6 +89,7 @@ python "$BATCH_SCRIPT" \
   --batch-p "$BATCH_P" \
   --stein-step "$STEIN_STEP" \
   --stein-loop "$STEIN_LOOP" \
+  "${stein_bandwidth_args[@]}" \
   --steer-start "$STEER_START" \
   --steer-end "$STEER_END" \
   "${reward_scale_fixed_args[@]}" \
