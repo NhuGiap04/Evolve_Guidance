@@ -537,16 +537,6 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
 def main() -> int:
     args = parse_args()
 
-    if args.predicted_samples is not None and args.predicted_samples < 1:
-        raise ValueError("--predicted-samples must be >= 1")
-    if args.prediction_model is not None and args.prediction_model != "default":
-        raise NotImplementedError(
-            f"--prediction-model {args.prediction_model!r} is reserved but not implemented yet. "
-            "Use --prediction-model default."
-        )
-    if args.prediction_model in (None, "default") and args.predicted_samples not in (None, 1):
-        raise ValueError("--prediction-model default currently supports only --predicted-samples 1")
-
     if not args.prompts_file.exists():
         print(_c(f"Prompt file not found: {args.prompts_file}", _Style.RED, _Style.BOLD))
         return 2

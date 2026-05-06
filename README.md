@@ -49,7 +49,7 @@ Run one SDXL prompt with approximate soft good-probability guidance:
 
 ```bash
 python runs/single/approx_sdxl.py \
-  --config pick \
+  --config image_reward \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \
   --num-particles 4 \
@@ -68,7 +68,7 @@ Run SDXL batch prompts with approximate guidance:
 ```bash
 python runs/approx/sdxl_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
-  --config pick \
+  --config image_reward \
   --device cuda \
   --num-steps 100 \
   --num-particles 4 \
@@ -121,7 +121,7 @@ Run one SD 1.5 prompt with approximate soft good-probability guidance:
 
 ```bash
 python runs/single/approx_sd.py \
-  --config pick \
+  --config image_reward \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \
   --num-particles 4 \
@@ -140,7 +140,7 @@ Run SD 1.5 batch prompts with approximate guidance:
 ```bash
 python runs/approx/sd_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
-  --config pick \
+  --config image_reward \
   --device cuda \
   --num-steps 100 \
   --num-particles 4 \

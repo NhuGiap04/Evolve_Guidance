@@ -271,16 +271,6 @@ def main():
 
     if args.trace_eval_batch < 1:
         args.trace_eval_batch = 1
-    if args.predicted_samples is not None and args.predicted_samples < 1:
-        raise ValueError("--predicted-samples must be >= 1")
-    if args.prediction_model is not None and args.prediction_model != "default":
-        raise NotImplementedError(
-            f"--prediction-model {args.prediction_model!r} is reserved but not implemented yet. "
-            "Use --prediction-model default."
-        )
-    if args.prediction_model in (None, "default") and args.predicted_samples not in (None, 1):
-        raise ValueError("--prediction-model default currently supports only --predicted-samples 1")
-
     config = get_config(args.config)
     if args.seed is not None:
         config.seed = args.seed

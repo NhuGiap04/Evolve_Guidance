@@ -236,19 +236,6 @@ def pipeline_using_approx_sd(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
-    if predicted_samples < 1:
-        raise ValueError("predicted_samples must be >= 1")
-    prediction_model_normalized = prediction_model.lower().strip()
-    if prediction_model_normalized not in {"default", "dpm", "lcm", "dmd"}:
-        raise ValueError("prediction_model must be one of: default, dpm, lcm, dmd")
-    if prediction_model_normalized == "default" and predicted_samples != 1:
-        raise ValueError("prediction_model='default' currently supports only predicted_samples=1")
-    if prediction_model_normalized != "default":
-        raise NotImplementedError(
-            f"prediction_model='{prediction_model}' is reserved but not implemented yet. "
-            "Use prediction_model='default'."
-        )
-
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
         "prompt": prompt,
@@ -526,6 +513,34 @@ def pipeline_using_approx_sd(
         pred_x0 = (current_latents - sqrt_one_minus_alpha_bar_t * noise_pred_local) / sqrt_alpha_bar_t
         return pred_x0, sqrt_alpha_bar_t, sqrt_one_minus_alpha_bar_t
 
+    def x0_lookahead(
+        current_latents: torch.Tensor,
+        t: torch.Tensor,
+        prediction_model: str,
+        predicted_samples: int,
+        start_idx: Optional[int] = None,
+        end_idx: Optional[int] = None,
+    ) -> torch.Tensor:
+        if predicted_samples < 1:
+            raise ValueError("predicted_samples must be >= 1")
+
+        prediction_model_normalized = prediction_model.lower().strip()
+        if prediction_model_normalized not in {"default", "dpm", "lcm", "dmd"}:
+            raise ValueError("prediction_model must be one of: default, dpm, lcm, dmd")
+
+        if prediction_model_normalized != "default":
+            raise NotImplementedError(
+                f"prediction_model='{prediction_model}' is reserved but not implemented yet. "
+                "Use prediction_model='default'."
+            )
+
+        if predicted_samples != 1:
+            raise ValueError("prediction_model='default' currently supports only predicted_samples=1")
+
+        noise_pred_local = _predict_noise(current_latents, t, start_idx=start_idx, end_idx=end_idx)
+        pred_x0, _, _ = _predict_x0(current_latents, _to_timestep_int(t), noise_pred_local)
+        return pred_x0
+
     def _compute_reward(current_latents: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if reward_fn is None or prompt_particles is None:
             return torch.zeros(current_latents.shape[0], device=current_latents.device, dtype=current_latents.dtype)
@@ -536,8 +551,14 @@ def pipeline_using_approx_sd(
             lat_chunk = current_latents[start_idx:end_idx]
 
             with torch.no_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
-                pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
+                pred_x0_chunk = x0_lookahead(
+                    lat_chunk,
+                    t,
+                    prediction_model=prediction_model,
+                    predicted_samples=predicted_samples,
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                )
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 
@@ -566,8 +587,14 @@ def pipeline_using_approx_sd(
             lat_chunk = current_latents[start_idx:end_idx]
 
             with torch.no_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
-                pred_x0_chunk, _, _ = _predict_x0(lat_chunk, t_int_local, noise_pred_chunk)
+                pred_x0_chunk = x0_lookahead(
+                    lat_chunk,
+                    t,
+                    prediction_model=prediction_model,
+                    predicted_samples=predicted_samples,
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                )
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 
@@ -646,10 +673,13 @@ def pipeline_using_approx_sd(
                 last_good_score = None
 
                 for loop_idx in range(stein_loop):
-                    noise_pred_for_score = _predict_noise(latents, t)
-                    pred_x0_for_score, _, _ = _predict_x0(latents, t_int, noise_pred_for_score)
                     if loop_idx == 0:
-                        pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
+                        pre_stein_pred_x0 = x0_lookahead(
+                            latents,
+                            t,
+                            prediction_model=prediction_model,
+                            predicted_samples=predicted_samples,
+                        ).detach().clone()
 
                     reward_values, good_score = _compute_soft_good_score(
                         latents,
