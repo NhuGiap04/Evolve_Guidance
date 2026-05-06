@@ -327,6 +327,10 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     _append_optional_arg(cmd, "--reward-guidance-rho", args.reward_guidance_rho)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
+    _append_optional_arg(cmd, "--x0-anchor-model", args.x0_anchor_model)
+    _append_optional_arg(cmd, "--x0-anchor-steps", args.x0_anchor_steps)
+    _append_optional_arg(cmd, "--x0-anchor-lora-path", args.x0_anchor_lora_path)
+    _append_optional_arg(cmd, "--x0-anchor-lora-scale", args.x0_anchor_lora_scale)
 
     if args.save_intermediate_images:
         cmd.append("--save-intermediate-images")
@@ -570,6 +574,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
+    parser.add_argument(
+        "--x0-anchor-model",
+        type=str,
+        default=None,
+        choices=["base", "dpm", "lcm", "dmd2"],
+        help="Anchor predictor for x0 during reward evaluation (base, dpm, lcm, dmd2).",
+    )
+    parser.add_argument(
+        "--x0-anchor-steps",
+        type=int,
+        default=None,
+        help="Number of anchor solver steps when using dpm/lcm (>=1).",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-path",
+        type=str,
+        default=None,
+        help="Optional LoRA path for LCM anchor prediction.",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-scale",
+        type=float,
+        default=None,
+        help="Optional LoRA scale for LCM anchor prediction.",
+    )
 
     parser.add_argument("--save-intermediate-images", action="store_true")
     parser.add_argument("--save-intermediate-rewards", action="store_true")

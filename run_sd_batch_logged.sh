@@ -28,6 +28,12 @@ REWARD_SCALE_FIXED="${REWARD_SCALE_FIXED:-}"
 SAVE_INTERMEDIATE_REWARDS="${SAVE_INTERMEDIATE_REWARDS:-0}"
 PLOT_AFTER_RUN="${PLOT_AFTER_RUN:-1}"
 PLOT_BLOCK="${PLOT_BLOCK:-1}"
+X0_ANCHOR_MODEL="${X0_ANCHOR_MODEL:-}"
+X0_ANCHOR_STEPS="${X0_ANCHOR_STEPS:-}"
+X0_ANCHOR_LORA_PATH="${X0_ANCHOR_LORA_PATH:-}"
+X0_ANCHOR_LORA_SCALE="${X0_ANCHOR_LORA_SCALE:-}"
+X0_ANCHOR_LORA_URL="${X0_ANCHOR_LORA_URL:-https://huggingface.co/latent-consistency/lcm-lora-sdv1-5/resolve/main/pytorch_lora_weights.safetensors}"
+X0_ANCHOR_LORA_FILE="${X0_ANCHOR_LORA_FILE:-models/lora/lcm-lora-sdv1-5/pytorch_lora_weights.safetensors}"
 SAVE_INTERMEDIATE_REWARDS_ARG=""
 if [[ "$SAVE_INTERMEDIATE_REWARDS" == "1" || "$SAVE_INTERMEDIATE_REWARDS" == "true" ]]; then
   SAVE_INTERMEDIATE_REWARDS_ARG="--save-intermediate-rewards"
@@ -60,14 +66,42 @@ reward_scale_fixed_args=()
 if [[ -n "$REWARD_SCALE_FIXED" ]]; then
   reward_scale_fixed_args=(--reward-scale-fixed "$REWARD_SCALE_FIXED")
 fi
+anchor_args=()
+if [[ "$X0_ANCHOR_MODEL" == "lcm" && -z "$X0_ANCHOR_LORA_PATH" ]]; then
+  if [[ ! -f "$X0_ANCHOR_LORA_FILE" ]]; then
+    echo "[INFO] Downloading LCM LoRA to $X0_ANCHOR_LORA_FILE"
+    mkdir -p "$(dirname "$X0_ANCHOR_LORA_FILE")"
+    if command -v curl >/dev/null 2>&1; then
+      curl -L -o "$X0_ANCHOR_LORA_FILE" "$X0_ANCHOR_LORA_URL"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -O "$X0_ANCHOR_LORA_FILE" "$X0_ANCHOR_LORA_URL"
+    else
+      echo "[ERROR] curl or wget is required to download the LoRA file."
+      exit 1
+    fi
+  fi
+  X0_ANCHOR_LORA_PATH="$X0_ANCHOR_LORA_FILE"
+fi
+if [[ -n "$X0_ANCHOR_MODEL" ]]; then
+  anchor_args+=(--x0-anchor-model "$X0_ANCHOR_MODEL")
+fi
+if [[ -n "$X0_ANCHOR_STEPS" ]]; then
+  anchor_args+=(--x0-anchor-steps "$X0_ANCHOR_STEPS")
+fi
+if [[ -n "$X0_ANCHOR_LORA_PATH" ]]; then
+  anchor_args+=(--x0-anchor-lora-path "$X0_ANCHOR_LORA_PATH")
+fi
+if [[ -n "$X0_ANCHOR_LORA_SCALE" ]]; then
+  anchor_args+=(--x0-anchor-lora-scale "$X0_ANCHOR_LORA_SCALE")
+fi
 stein_bandwidth_args=()
 if [[ -n "$STEIN_BANDWIDTH" ]]; then
   stein_bandwidth_args=(--stein-bandwidth "$STEIN_BANDWIDTH")
 fi
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -93,6 +127,7 @@ python "$BATCH_SCRIPT" \
   --steer-start "$STEER_START" \
   --steer-end "$STEER_END" \
   "${reward_scale_fixed_args[@]}" \
+  "${anchor_args[@]}" \
   --verbose \
   "$PLOT_AFTER_RUN_ARG" \
   "$PLOT_BLOCK_ARG" \

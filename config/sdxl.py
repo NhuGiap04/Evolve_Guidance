@@ -24,16 +24,13 @@ def seg():
     config.sample.steer_start = None
     config.sample.steer_end = None
     config.sample.intermediate_rewards = True
+    config.sample.x0_anchor_model = "base"
+    config.sample.x0_anchor_steps = 1
+    config.sample.x0_anchor_lora_path = None
+    config.sample.x0_anchor_lora_scale = 1.0
 
     config.pretrained.model = "stabilityai/stable-diffusion-xl-base-1.0"
 
-    return config
-
-
-def dpm_seg():
-    config = seg()
-    config.sample.num_steps = 30
-    config.sample.eta = 0.0
     return config
 
 
@@ -46,26 +43,9 @@ def clip():
     return config
 
 
-def dpm_clip():
-    print("CLIP Score (DPM)")
-    config = dpm_seg()
-    config.reward_fn = "clip"
-    config.prompt_fn = "eval_hps_v2_all"
-
-    return config
-
 def pick():
     print("PickScore")
     config = seg()
-    config.reward_fn = "pick"
-    config.prompt_fn = "eval_hps_v2_all"
-
-    return config
-
-
-def dpm_pick():
-    print("PickScore (DPM)")
-    config = dpm_seg()
     config.reward_fn = "pick"
     config.prompt_fn = "eval_hps_v2_all"
 

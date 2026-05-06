@@ -109,6 +109,31 @@ def parse_args():
         default=None,
         help="Steering end inference-step index (0-based, default: last step).",
     )
+    parser.add_argument(
+        "--x0-anchor-model",
+        type=str,
+        default=None,
+        choices=["base", "dpm", "lcm"],
+        help="Anchor predictor for x0 during reward evaluation (base, dpm, lcm).",
+    )
+    parser.add_argument(
+        "--x0-anchor-steps",
+        type=int,
+        default=None,
+        help="Number of anchor solver steps when using dpm/lcm (>=1).",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-path",
+        type=str,
+        default=None,
+        help="Optional LoRA path for LCM anchor prediction.",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-scale",
+        type=float,
+        default=None,
+        help="Optional LoRA scale for LCM anchor prediction.",
+    )
 
     parser.add_argument(
         "--save-intermediate-images",
@@ -356,6 +381,14 @@ def main():
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
         config.sample.steer_end = args.steer_end
+    if args.x0_anchor_model is not None:
+        config.sample.x0_anchor_model = args.x0_anchor_model
+    if args.x0_anchor_steps is not None:
+        config.sample.x0_anchor_steps = args.x0_anchor_steps
+    if args.x0_anchor_lora_path is not None:
+        config.sample.x0_anchor_lora_path = args.x0_anchor_lora_path
+    if args.x0_anchor_lora_scale is not None:
+        config.sample.x0_anchor_lora_scale = args.x0_anchor_lora_scale
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -461,6 +494,10 @@ def main():
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         intermediate_rewards=(args.save_intermediate_rewards or args.show_intermediate_rewards),
+        x0_anchor_model=config.sample.x0_anchor_model,
+        x0_anchor_steps=config.sample.x0_anchor_steps,
+        x0_anchor_lora_path=config.sample.x0_anchor_lora_path,
+        x0_anchor_lora_scale=config.sample.x0_anchor_lora_scale,
         return_all_particles=True,
         return_dict=False,
     )

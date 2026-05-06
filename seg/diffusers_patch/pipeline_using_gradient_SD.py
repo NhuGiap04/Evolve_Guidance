@@ -2,6 +2,7 @@
 
 import inspect
 import math
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import torch
@@ -245,6 +246,10 @@ def pipeline_using_gradient_sd(
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
     intermediate_rewards: bool = False,
+    x0_anchor_model: str = "base",
+    x0_anchor_steps: int = 1,
+    x0_anchor_lora_path: Optional[str] = None,
+    x0_anchor_lora_scale: float = 1.0,
     **kwargs,
 ) -> Union[StableDiffusionPipelineOutput, Tuple]:
     """Run SD denoising with optional Stein particle transport guidance."""
@@ -295,6 +300,8 @@ def pipeline_using_gradient_sd(
         raise ValueError("reward_guidance_rho must be >= 0")
     if stein_bandwidth not in {"median", "sigma_t"}:
         raise ValueError("stein_bandwidth must be one of {'median', 'sigma_t'}")
+    if x0_anchor_steps < 1:
+        raise ValueError("x0_anchor_steps must be >= 1")
 
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
@@ -511,6 +518,62 @@ def pipeline_using_gradient_sd(
         "cosine_similarity_max": [],
     }
 
+    x0_anchor_model = (x0_anchor_model or "base").lower().strip()
+    if x0_anchor_model not in {"base", "dpm", "lcm"}:
+        raise ValueError("x0_anchor_model must be one of {'base', 'dpm', 'lcm'}")
+    if x0_anchor_model == "lcm" and x0_anchor_lora_path is None:
+        raise ValueError("x0_anchor_lora_path must be set when x0_anchor_model is 'lcm'.")
+
+    x0_anchor_adapter_name = "x0_anchor"
+    x0_anchor_lora_loaded = False
+    x0_anchor_scheduler = None
+    if x0_anchor_model in {"dpm", "lcm"}:
+        if x0_anchor_model == "dpm":
+            from diffusers import DPMSolverMultistepScheduler
+
+            x0_anchor_scheduler = DPMSolverMultistepScheduler.from_config(self.scheduler.config)
+        else:
+            from diffusers import LCMScheduler
+
+            x0_anchor_scheduler = LCMScheduler.from_config(self.scheduler.config)
+
+    def _ensure_x0_anchor_lora() -> None:
+        nonlocal x0_anchor_lora_loaded
+        if x0_anchor_lora_path is None or x0_anchor_lora_loaded:
+            return
+        if not hasattr(self, "load_lora_weights"):
+            raise ValueError("Pipeline does not support load_lora_weights for x0_anchor_lora_path.")
+        self.load_lora_weights(x0_anchor_lora_path, adapter_name=x0_anchor_adapter_name)
+        x0_anchor_lora_loaded = True
+
+    @contextmanager
+    def _maybe_use_x0_anchor_lora():
+        if x0_anchor_model != "lcm" or x0_anchor_lora_path is None:
+            yield
+            return
+
+        _ensure_x0_anchor_lora()
+        if not hasattr(self, "set_adapters"):
+            raise ValueError("Pipeline does not support set_adapters for x0_anchor_lora_path.")
+
+        prev_adapters = None
+        if hasattr(self, "get_active_adapters"):
+            prev_adapters = self.get_active_adapters()
+
+        set_params = inspect.signature(self.set_adapters).parameters
+        if "adapter_weights" in set_params:
+            self.set_adapters([x0_anchor_adapter_name], adapter_weights=[float(x0_anchor_lora_scale)])
+        else:
+            self.set_adapters([x0_anchor_adapter_name])
+
+        try:
+            yield
+        finally:
+            if prev_adapters is not None:
+                self.set_adapters(prev_adapters)
+            else:
+                self.set_adapters([])
+
     def _slice_condition_tensor(
         condition: torch.Tensor,
         start_idx: Optional[int],
@@ -549,9 +612,11 @@ def pipeline_using_gradient_sd(
         t: torch.Tensor,
         start_idx: Optional[int] = None,
         end_idx: Optional[int] = None,
+        scheduler_override=None,
     ) -> torch.Tensor:
+        scheduler_ref = scheduler_override or self.scheduler
         latent_model_input = torch.cat([current_latents] * 2) if self.do_classifier_free_guidance else current_latents
-        latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+        latent_model_input = scheduler_ref.scale_model_input(latent_model_input, t)
 
         prompt_embeds_local = _slice_condition_tensor(prompt_embeds, start_idx, end_idx)
 
@@ -587,12 +652,96 @@ def pipeline_using_gradient_sd(
 
         return noise_pred_local
 
-    def _predict_x0(current_latents: torch.Tensor, t_int: int, noise_pred_local: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        alpha_bar_t = self.scheduler.alphas_cumprod[t_int].to(device=current_latents.device, dtype=current_latents.dtype)
+    def _predict_x0(
+        current_latents: torch.Tensor,
+        t_int: int,
+        noise_pred_local: torch.Tensor,
+        scheduler_override=None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        scheduler_ref = scheduler_override or self.scheduler
+        alpha_bar_t = scheduler_ref.alphas_cumprod[t_int].to(device=current_latents.device, dtype=current_latents.dtype)
         sqrt_alpha_bar_t = torch.sqrt(torch.clamp(alpha_bar_t, min=1e-6))
         sqrt_one_minus_alpha_bar_t = torch.sqrt(torch.clamp(1.0 - alpha_bar_t, min=1e-6))
         pred_x0 = (current_latents - sqrt_one_minus_alpha_bar_t * noise_pred_local) / sqrt_alpha_bar_t
         return pred_x0, sqrt_alpha_bar_t, sqrt_one_minus_alpha_bar_t
+
+    def _build_anchor_timesteps(t_int: int) -> List[int]:
+        if x0_anchor_steps <= 1 or t_int <= 0:
+            return [int(t_int)]
+
+        candidate = torch.linspace(float(t_int), 0.0, x0_anchor_steps).round().to(torch.int64).tolist()
+        timesteps_out: List[int] = []
+        last = None
+        for value in candidate:
+            step_t = int(value)
+            if last is None or step_t < last:
+                timesteps_out.append(step_t)
+                last = step_t
+
+        if not timesteps_out or timesteps_out[-1] != 0:
+            timesteps_out.append(0)
+        return timesteps_out
+
+    def _scheduler_step(
+        scheduler_obj,
+        noise_pred_local: torch.Tensor,
+        t: torch.Tensor,
+        current_latents: torch.Tensor,
+    ) -> torch.Tensor:
+        step_params = inspect.signature(scheduler_obj.step).parameters
+        step_kwargs: Dict[str, Any] = {}
+        if "generator" in step_params:
+            step_kwargs["generator"] = generator
+        if "eta" in step_params:
+            step_kwargs["eta"] = eta
+        if "return_dict" in step_params:
+            step_kwargs["return_dict"] = False
+        output = scheduler_obj.step(noise_pred_local, t, current_latents, **step_kwargs)
+        if isinstance(output, (tuple, list)):
+            return output[0]
+        return output.prev_sample
+
+    def _predict_x0_anchor(
+        current_latents: torch.Tensor,
+        t: torch.Tensor,
+        start_idx: Optional[int] = None,
+        end_idx: Optional[int] = None,
+    ) -> torch.Tensor:
+        if x0_anchor_model == "base":
+            noise_pred_local = _predict_noise(current_latents, t, start_idx=start_idx, end_idx=end_idx)
+            pred_x0_local, _, _ = _predict_x0(current_latents, _to_timestep_int(t), noise_pred_local)
+            return pred_x0_local
+
+        if x0_anchor_scheduler is None:
+            raise ValueError("x0_anchor_scheduler is not initialized for x0_anchor_model.")
+
+        t_int = _to_timestep_int(t)
+        anchor_timesteps = _build_anchor_timesteps(t_int)
+        x0_anchor_scheduler.set_timesteps(timesteps=anchor_timesteps, device=device)
+
+        anchor_latents = current_latents
+        with _maybe_use_x0_anchor_lora():
+            for anchor_t in x0_anchor_scheduler.timesteps:
+                noise_pred_local = _predict_noise(
+                    anchor_latents,
+                    anchor_t,
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                    scheduler_override=x0_anchor_scheduler,
+                )
+                anchor_latents = _scheduler_step(x0_anchor_scheduler, noise_pred_local, anchor_t, anchor_latents)
+
+            final_t = x0_anchor_scheduler.timesteps[-1]
+            noise_pred_final = _predict_noise(
+                anchor_latents,
+                final_t,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                scheduler_override=x0_anchor_scheduler,
+            )
+
+        pred_x0_local, _, _ = _predict_x0(anchor_latents, _to_timestep_int(final_t), noise_pred_final)
+        return pred_x0_local
 
     def _compute_reward(current_latents: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if reward_fn is None or prompt_particles is None:
@@ -604,8 +753,7 @@ def pipeline_using_gradient_sd(
             lat_chunk = current_latents[start_idx:end_idx]
 
             with torch.no_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
-                pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
+                pred_x0_chunk = _predict_x0_anchor(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 
@@ -633,8 +781,7 @@ def pipeline_using_gradient_sd(
             lat_chunk = current_latents[start_idx:end_idx].detach().requires_grad_(True)
 
             with torch.enable_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
-                pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
+                pred_x0_chunk = _predict_x0_anchor(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
 
@@ -729,7 +876,7 @@ def pipeline_using_gradient_sd(
                     noise_pred_for_score = _predict_noise(latents, t)
                     pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
                     if loop_idx == 0:
-                        pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
+                        pre_stein_pred_x0 = _predict_x0_anchor(latents, t).detach().clone()
                     prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
 
                     reward_values, reward_grad = _compute_reward_grad(
@@ -845,7 +992,7 @@ def pipeline_using_gradient_sd(
             steered_noise_pred = _predict_noise(latents, t)
             pred_x0, _, _ = _predict_x0(latents, t_int, steered_noise_pred)
             if is_steered_step:
-                post_stein_pred_x0 = pred_x0.detach().clone()
+                post_stein_pred_x0 = _predict_x0_anchor(latents, t).detach().clone()
 
             latents_dtype = latents.dtype
             latents = (

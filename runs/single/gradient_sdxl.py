@@ -3,6 +3,7 @@ import csv
 import gc
 import json
 import time
+import urllib.request
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -102,6 +103,31 @@ def parse_args():
         default=None,
         help="Steering end inference-step index (0-based, default: last step).",
     )
+    parser.add_argument(
+        "--x0-anchor-model",
+        type=str,
+        default=None,
+        choices=["base", "dpm", "lcm", "dmd2"],
+        help="Anchor predictor for x0 during reward evaluation (base, dpm, lcm, dmd2).",
+    )
+    parser.add_argument(
+        "--x0-anchor-steps",
+        type=int,
+        default=None,
+        help="Number of anchor solver steps when using dpm/lcm (>=1).",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-path",
+        type=str,
+        default=None,
+        help="Optional LoRA path for LCM anchor prediction.",
+    )
+    parser.add_argument(
+        "--x0-anchor-lora-scale",
+        type=float,
+        default=None,
+        help="Optional LoRA scale for LCM anchor prediction.",
+    )
 
     parser.add_argument(
         "--save-intermediate-images",
@@ -200,6 +226,15 @@ def save_before_after_plot(step_ids, pre_values, post_values, title, ylabel, out
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
     plt.close()
+
+
+def _download_lora_if_missing(url: str, target_path: Path) -> None:
+    if target_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[INFO] Downloading LoRA to {target_path}")
+    with urllib.request.urlopen(url) as response, open(target_path, "wb") as handle:
+        handle.write(response.read())
 
 
 def _expand_prompts_for_particles(prompts, num_particles):
@@ -347,6 +382,14 @@ def main():
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
         config.sample.steer_end = args.steer_end
+    if args.x0_anchor_model is not None:
+        config.sample.x0_anchor_model = args.x0_anchor_model
+    if args.x0_anchor_steps is not None:
+        config.sample.x0_anchor_steps = args.x0_anchor_steps
+    if args.x0_anchor_lora_path is not None:
+        config.sample.x0_anchor_lora_path = args.x0_anchor_lora_path
+    if args.x0_anchor_lora_scale is not None:
+        config.sample.x0_anchor_lora_scale = args.x0_anchor_lora_scale
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -357,6 +400,16 @@ def main():
         torch.cuda.manual_seed_all(config.seed)
 
     inference_dtype = torch.float16 if device.type == "cuda" else torch.float32
+    if config.sample.x0_anchor_model == "dmd2" and config.sample.x0_anchor_lora_path is None:
+        lora_dir = Path("models/lora/dmd2_sdxl")
+        if inference_dtype == torch.float16:
+            lora_file = lora_dir / "dmd2_sdxl_4step_lora_fp16.safetensors"
+            lora_url = "https://huggingface.co/tianweiy/DMD2/resolve/main/dmd2_sdxl_4step_lora_fp16.safetensors"
+        else:
+            lora_file = lora_dir / "dmd2_sdxl_4step_lora.safetensors"
+            lora_url = "https://huggingface.co/tianweiy/DMD2/resolve/main/dmd2_sdxl_4step_lora.safetensors"
+        _download_lora_if_missing(lora_url, lora_file)
+        config.sample.x0_anchor_lora_path = str(lora_file)
     load_kwargs = {"torch_dtype": inference_dtype, "use_safetensors": True}
     if inference_dtype == torch.float16:
         load_kwargs["variant"] = "fp16"
@@ -452,6 +505,10 @@ def main():
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         intermediate_rewards=(args.save_intermediate_rewards or args.show_intermediate_rewards),
+        x0_anchor_model=config.sample.x0_anchor_model,
+        x0_anchor_steps=config.sample.x0_anchor_steps,
+        x0_anchor_lora_path=config.sample.x0_anchor_lora_path,
+        x0_anchor_lora_scale=config.sample.x0_anchor_lora_scale,
         return_all_particles=True,
         return_dict=False,
     )
