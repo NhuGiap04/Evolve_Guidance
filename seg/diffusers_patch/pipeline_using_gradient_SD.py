@@ -113,6 +113,7 @@ def _rbf_stein_vector_field(
     score: torch.Tensor,
     base_sample_count: int,
     num_particles: int,
+    h_bandwidth: Optional[torch.Tensor] = None,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
@@ -134,17 +135,21 @@ def _rbf_stein_vector_field(
         dist2 = torch.cdist(x, x) ** 2
         positive_dist2 = dist2[dist2 > 0]
         if positive_dist2.numel() == 0:
-            h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
+            h_bandwidth_group = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
         else:
-            h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
-            h_bandwidth = torch.clamp(h_bandwidth, min=eps)
+            h_bandwidth_group = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
 
-        kernel = torch.exp(-dist2 / h_bandwidth)
+        if h_bandwidth is not None:
+            h_bandwidth_group = h_bandwidth_group * h_bandwidth.to(device=latents.device, dtype=latents.dtype)
+
+        h_bandwidth_group = torch.clamp(h_bandwidth_group, min=eps)
+
+        kernel = torch.exp(-dist2 / h_bandwidth_group)
         attraction = (kernel.t() @ s) / float(num_particles)
 
         weighted_sum = kernel.t() @ x
         kernel_sum = kernel.sum(dim=0, keepdim=True).t()
-        repulsion = (2.0 / h_bandwidth) * (weighted_sum - x * kernel_sum) / float(num_particles)
+        repulsion = (2.0 / h_bandwidth_group) * (weighted_sum - x * kernel_sum) / float(num_particles)
 
         phi = attraction + repulsion
         out_grouped[group_idx] = phi.view(num_particles, c, h, w)
@@ -230,6 +235,7 @@ def pipeline_using_gradient_sd(
     stein_step: float = 0.05,
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
+    stein_bandwidth: str = "median",
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
@@ -287,6 +293,8 @@ def pipeline_using_gradient_sd(
         raise ValueError("stein_step must be >= 0")
     if reward_guidance_rho < 0:
         raise ValueError("reward_guidance_rho must be >= 0")
+    if stein_bandwidth not in {"median", "sigma_t"}:
+        raise ValueError("stein_bandwidth must be one of {'median', 'sigma_t'}")
 
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
@@ -657,6 +665,43 @@ def pipeline_using_gradient_sd(
             noise_pred = _predict_noise(latents, t)
             is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
 
+            if hasattr(self.scheduler, "previous_timestep"):
+                prev_t = self.scheduler.previous_timestep(t)
+                prev_t_int = int(prev_t.item()) if torch.is_tensor(prev_t) else int(prev_t)
+            else:
+                if i + 1 < len(timesteps):
+                    prev_t = timesteps[i + 1]
+                    prev_t_int = _to_timestep_int(prev_t)
+                else:
+                    prev_t = -1
+                    prev_t_int = -1
+
+            if prev_t_int >= 0:
+                alpha_bar_prev = self.scheduler.alphas_cumprod[prev_t_int]
+            else:
+                final_alpha = getattr(self.scheduler, "final_alpha_cumprod", None)
+                if final_alpha is None:
+                    if hasattr(self.scheduler, "alphas_cumprod") and len(self.scheduler.alphas_cumprod) > 0:
+                        final_alpha = self.scheduler.alphas_cumprod[0]
+                    else:
+                        final_alpha = 1.0
+                alpha_bar_prev = final_alpha
+            if not torch.is_tensor(alpha_bar_prev):
+                alpha_bar_prev = torch.tensor(alpha_bar_prev, device=latents.device, dtype=latents.dtype)
+            alpha_bar_prev = alpha_bar_prev.to(device=latents.device, dtype=latents.dtype)
+
+            if hasattr(self.scheduler, "_get_variance"):
+                variance_t = self.scheduler._get_variance(t, prev_t)
+                if not torch.is_tensor(variance_t):
+                    variance_t = torch.tensor(variance_t, device=latents.device, dtype=latents.dtype)
+                variance_t = variance_t.to(device=latents.device, dtype=latents.dtype)
+            else:
+                variance_t = torch.tensor(0.0, device=latents.device, dtype=latents.dtype)
+
+            sigma_t = eta * torch.sqrt(torch.clamp(variance_t, min=0.0))
+            pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t ** 2, min=0.0))
+            white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
+
             pre_stein_latents = None
             post_stein_latents = None
             pre_stein_pred_x0 = None
@@ -731,11 +776,16 @@ def pipeline_using_gradient_sd(
                     if stein_kernel != "rbf":
                         raise ValueError(f"Unsupported stein_kernel: {stein_kernel}. Only 'rbf' is currently supported.")
 
+                    h_bandwidth = None
+                    if stein_bandwidth == "sigma_t":
+                        h_bandwidth = sigma_t
+
                     stein_direction = _rbf_stein_vector_field(
                         latents=latents.float(),
                         score=score_q,
                         base_sample_count=base_sample_count,
                         num_particles=num_particles,
+                        h_bandwidth=h_bandwidth,
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 
@@ -790,43 +840,6 @@ def pipeline_using_gradient_sd(
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
                     post_stein_latents = latents.detach().clone()
-
-            if hasattr(self.scheduler, "previous_timestep"):
-                prev_t = self.scheduler.previous_timestep(t)
-                prev_t_int = int(prev_t.item()) if torch.is_tensor(prev_t) else int(prev_t)
-            else:
-                if i + 1 < len(timesteps):
-                    prev_t = timesteps[i + 1]
-                    prev_t_int = _to_timestep_int(prev_t)
-                else:
-                    prev_t = -1
-                    prev_t_int = -1
-
-            if prev_t_int >= 0:
-                alpha_bar_prev = self.scheduler.alphas_cumprod[prev_t_int]
-            else:
-                final_alpha = getattr(self.scheduler, "final_alpha_cumprod", None)
-                if final_alpha is None:
-                    if hasattr(self.scheduler, "alphas_cumprod") and len(self.scheduler.alphas_cumprod) > 0:
-                        final_alpha = self.scheduler.alphas_cumprod[0]
-                    else:
-                        final_alpha = 1.0
-                alpha_bar_prev = final_alpha
-            if not torch.is_tensor(alpha_bar_prev):
-                alpha_bar_prev = torch.tensor(alpha_bar_prev, device=latents.device, dtype=latents.dtype)
-            alpha_bar_prev = alpha_bar_prev.to(device=latents.device, dtype=latents.dtype)
-
-            if hasattr(self.scheduler, "_get_variance"):
-                variance_t = self.scheduler._get_variance(t, prev_t)
-                if not torch.is_tensor(variance_t):
-                    variance_t = torch.tensor(variance_t, device=latents.device, dtype=latents.dtype)
-                variance_t = variance_t.to(device=latents.device, dtype=latents.dtype)
-            else:
-                variance_t = torch.tensor(0.0, device=latents.device, dtype=latents.dtype)
-
-            sigma_t = eta * torch.sqrt(torch.clamp(variance_t, min=0.0))
-            pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t ** 2, min=0.0))
-            white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
 
             # Pred x0|t = x0(steered_xt)
             steered_noise_pred = _predict_noise(latents, t)
