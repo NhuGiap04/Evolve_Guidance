@@ -11,7 +11,7 @@ pip install --no-deps image-reward
 
 ## Quick Start
 
-Run one SDXL prompt:
+Run one SDXL prompt with gradient Stein guidance:
 
 ```bash
 python runs/single/gradient_sdxl.py \
@@ -27,10 +27,10 @@ python runs/single/gradient_sdxl.py \
   --output-dir logs/sdxl
 ```
 
-Run SDXL batch prompts:
+Run SDXL batch prompts with gradient Stein guidance:
 
 ```bash
-python runs/gradient_sdxl_batch.py \
+python runs/gradient/sdxl_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
   --device cuda \
@@ -45,7 +45,45 @@ python runs/gradient_sdxl_batch.py \
   --output-dir logs/sdxl_batch
 ```
 
-Run one SD 1.5 prompt:
+Run one SDXL prompt with approximate soft good-probability guidance:
+
+```bash
+python runs/single/approx_sdxl.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --num-steps 100 \
+  --num-particles 4 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --prediction-model default \
+  --predicted-samples 1 \
+  --monitor-status \
+  --steer-start 0 \
+  --steer-end 20 \
+  --output-dir logs/sdxl_approx
+```
+
+Run SDXL batch prompts with approximate guidance:
+
+```bash
+python runs/approx/sdxl_batch.py \
+  --prompts-file prompts/hps_v2_all_eval.txt \
+  --config pick \
+  --device cuda \
+  --num-steps 100 \
+  --num-particles 4 \
+  --batch-p 1 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --prediction-model default \
+  --predicted-samples 1 \
+  --steer-start 0 \
+  --steer-end 20 \
+  --verbose --trace-eval-batch 1 \
+  --output-dir logs/sdxl_approx_batch
+```
+
+Run one SD 1.5 prompt with gradient Stein guidance:
 
 ```bash
 python runs/single/gradient_sd.py \
@@ -61,10 +99,10 @@ python runs/single/gradient_sd.py \
   --output-dir logs/sd
 ```
 
-Run SD 1.5 batch prompts:
+Run SD 1.5 batch prompts with gradient Stein guidance:
 
 ```bash
-python runs/gradient_sd_batch.py \
+python runs/gradient/sd_batch.py \
   --prompts-file prompts/hps_v2_all_eval.txt \
   --config pick \
   --device cuda \
@@ -79,12 +117,50 @@ python runs/gradient_sd_batch.py \
   --output-dir logs/sd_batch
 ```
 
+Run one SD 1.5 prompt with approximate soft good-probability guidance:
+
+```bash
+python runs/single/approx_sd.py \
+  --config pick \
+  --prompt "A cinematic portrait of a fox astronaut" \
+  --num-steps 100 \
+  --num-particles 4 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --prediction-model default \
+  --predicted-samples 1 \
+  --monitor-status \
+  --steer-start 0 \
+  --steer-end 20 \
+  --output-dir logs/sd_approx
+```
+
+Run SD 1.5 batch prompts with approximate guidance:
+
+```bash
+python runs/approx/sd_batch.py \
+  --prompts-file prompts/hps_v2_all_eval.txt \
+  --config pick \
+  --device cuda \
+  --num-steps 100 \
+  --num-particles 4 \
+  --batch-p 1 \
+  --stein-loop 1 \
+  --stein-step 0.005 \
+  --prediction-model default \
+  --predicted-samples 1 \
+  --steer-start 0 \
+  --steer-end 20 \
+  --verbose --trace-eval-batch 1 \
+  --output-dir logs/sd_approx_batch
+```
+
 Useful flags:
 
 - `--start-index 100 --max-prompts 50`: run a slice of prompts.
 - `--stop-on-error`: stop on first failed prompt.
 - `--dry-run`: print commands without running them.
-- `--monitor-status`: print per-step latent steering stats (`rel_delta`, `abs_delta`, `steered_cosine_sim`, `score_pt_norm`, `target_score_norm`, `reward_grad_norm`).
+- `--monitor-status`: print per-step latent steering stats. Gradient runners report reward-gradient diagnostics; approx runners report soft good-score diagnostics.
 - `--verbose --trace-eval-batch 1`: save deferred intermediate reward traces and control intermediate-image decode batching.
 
 Batch outputs:
@@ -99,7 +175,7 @@ SD default checkpoint:
 
 ### Main Options
 
-- `--config`: reward preset (`pick`, `clip`, `seg`)
+- `--config`: reward preset (`pick`, `clip`, `image_reward`, `aesthetic`, `hpsv2`)
 - `--prompt`: text prompt
 - `--negative-prompt`: negative prompt text
 - `--output-dir`: output root for artifacts
@@ -110,19 +186,21 @@ SD default checkpoint:
 - `--guidance-scale`: CFG strength
 - `--eta`: DDIM eta
 - `--num-particles`: particle count for Stein guidance
-- `--batch-p`: reward-gradient micro-batch size over particles
+- `--batch-p`: reward evaluation / reward-gradient micro-batch size over particles
 - `--stein-loop`: Stein updates per steered step
 - `--stein-step`: Stein step size
 - `--stein-kernel`: Stein kernel (`rbf`)
 - `--stein-adagrad-eps`: AdaGrad epsilon for Stein step adaptation
 - `--kl-coeff`: reward scaling denominator
-- `--monitor-status`: print per-step latent delta diagnostics (`rel_delta`, `abs_delta`, `steered_cosine_sim`, `score_pt_norm`, `target_score_norm`, `reward_grad_norm`)
+- `--prediction-model`: approx-only clean prediction backend (`default`, `dpm`, `lcm`, `dmd`; only `default` is implemented currently)
+- `--predicted-samples`: approx-only number of predicted clean samples per particle
+- `--monitor-status`: print per-step latent delta diagnostics
 - `--steer-start`, `--steer-end`: steering window (0-based step index)
 
 ### Batch-only Options
 
 - `--prompts-file`: input prompts file (`.txt` or `.json`)
-- `--gradient-script` / `--sd-script` / `--sdxl-script`: single-run script path override
+- `--gradient-script`, `--approx-script`, `--sd-script`, `--sdxl-script`: single-run script path override
 - `--python`: python executable used for each spawned run
 - `--start-index`, `--max-prompts`: run a prompt slice
 - `--stop-on-error`: stop on first failing run
@@ -133,9 +211,9 @@ SD default checkpoint:
 
 ### Outputs
 
-SDXL saved in `logs/sdxl/<config>_seed<seed>`.
+SDXL gradient examples save in `logs/sdxl/<config>_seed<seed>`.
 
-SD saved in `logs/sd/<config>_seed<seed>`.
+SD gradient examples save in `logs/sd/<config>_seed<seed>`.
 
 Each run directory contains:
 

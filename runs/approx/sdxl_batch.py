@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for runs/single/gradient_sd.py using prompts from .txt or .json."""
+"""Batch runner for runs/single/approx_sdxl.py using prompts from .txt or .json."""
 
 import argparse
 import csv
@@ -126,10 +126,10 @@ def _append_optional_arg(cmd: List[str], flag: str, value: Optional[Any]) -> Non
     cmd.extend([flag, str(value)])
 
 
-def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> List[str]:
+def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> List[str]:
     cmd = [
         args.python,
-        str(args.sd_script),
+        str(args.sdxl_script),
         "--config",
         args.config,
         "--prompt",
@@ -155,6 +155,8 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
     _append_optional_arg(cmd, "--stein-kernel", args.stein_kernel)
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
+    _append_optional_arg(cmd, "--prediction-model", args.prediction_model)
+    _append_optional_arg(cmd, "--predicted-samples", args.predicted_samples)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
     if args.monitor_status:
@@ -211,26 +213,32 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run gradient_sd.py over prompts from a .txt or .json file.",
+        description="Run runs/single/approx_sdxl.py over prompts from a .txt or .json file.",
     )
     parser.add_argument("--prompts-file", type=Path, required=True, help="Path to .txt or .json prompts file.")
     parser.add_argument(
+        "--approx-script",
         "--gradient-script",
-        "--sd-script",
-        dest="sd_script",
+        "--sdxl-script",
+        dest="sdxl_script",
         type=Path,
-        default=Path("runs/single/gradient_sd.py"),
-        help="Path to the single-prompt gradient SD script.",
+        default=Path("runs/single/approx_sdxl.py"),
+        help="Path to the single-prompt approx SDXL script.",
     )
     parser.add_argument(
         "--python",
         type=str,
         default=sys.executable,
-        help="Python executable used to launch gradient_sd.py.",
+        help="Python executable used to launch runs/single/approx_sdxl.py.",
     )
-    parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="pick",
+        choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
+    )
     parser.add_argument("--negative-prompt", type=str, default="")
-    parser.add_argument("--output-dir", type=Path, default=Path("logs/sd_batch"))
+    parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_approx_batch"))
     parser.add_argument("--device", type=str, default="cuda")
 
     parser.add_argument("--seed", type=int, default=None)
@@ -246,6 +254,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
+    parser.add_argument("--prediction-model", type=str, default=None, choices=["default", "dpm", "lcm", "dmd"])
+    parser.add_argument("--predicted-samples", type=int, default=None)
     parser.add_argument("--monitor-status", action="store_true")
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
@@ -405,9 +415,9 @@ def _json_safe(value: Any) -> Any:
 def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
     # Prefer the source-of-truth config module when available.
     try:
-        from config.sd import get_config as get_sd_config  # type: ignore
+        from config.sdxl import get_config as get_sdxl_config  # type: ignore
 
-        config = get_sd_config(args.config)
+        config = get_sdxl_config(args.config)
         if args.seed is not None:
             config.seed = args.seed
         if args.num_steps is not None:
@@ -432,6 +442,10 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             config.sample.stein_adagrad_eps = args.stein_adagrad_eps
         if args.kl_coeff is not None:
             config.sample.kl_coeff = args.kl_coeff
+        if args.prediction_model is not None:
+            config.sample.prediction_model = args.prediction_model
+        if args.predicted_samples is not None:
+            config.sample.predicted_samples = args.predicted_samples
         if args.monitor_status:
             config.sample.monitor_status = True
         if args.steer_start is not None:
@@ -446,9 +460,9 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
         sample = _json_safe(config.sample.to_dict())
     except Exception:
         # Fallback for environments without config dependencies.
-        model = "runwayml/stable-diffusion-v1-5"
-        model_revision = "main"
-        reward_fn = {"pick": "pick", "clip": "clip", "seg": "clip"}.get(args.config, args.config)
+        model = "stabilityai/stable-diffusion-xl-base-1.0"
+        model_revision = ""
+        reward_fn = args.config
         seed = int(args.seed) if args.seed is not None else 42
         sample = {
             "num_steps": 100,
@@ -466,6 +480,8 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             "steer_start": None,
             "steer_end": None,
             "monitor_status": False,
+            "prediction_model": "default",
+            "predicted_samples": 1,
         }
         if args.num_steps is not None:
             sample["num_steps"] = args.num_steps
@@ -489,6 +505,10 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             sample["stein_adagrad_eps"] = args.stein_adagrad_eps
         if args.kl_coeff is not None:
             sample["kl_coeff"] = args.kl_coeff
+        if args.prediction_model is not None:
+            sample["prediction_model"] = args.prediction_model
+        if args.predicted_samples is not None:
+            sample["predicted_samples"] = args.predicted_samples
         if args.monitor_status:
             sample["monitor_status"] = True
         if args.steer_start is not None:
@@ -497,10 +517,10 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             sample["steer_end"] = args.steer_end
 
     payload = {
-        "runner": "gradient_sd_batch",
+        "runner": "approx_sdxl_batch",
         "created_at_unix": float(time.time()),
-        "pipeline_type": "sd",
-        "pipeline_script": str(args.sd_script),
+        "pipeline_type": "sdxl",
+        "pipeline_script": str(args.sdxl_script),
         "config_name": args.config,
         "model": model,
         "model_revision": model_revision,
@@ -517,11 +537,21 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
 def main() -> int:
     args = parse_args()
 
+    if args.predicted_samples is not None and args.predicted_samples < 1:
+        raise ValueError("--predicted-samples must be >= 1")
+    if args.prediction_model is not None and args.prediction_model != "default":
+        raise NotImplementedError(
+            f"--prediction-model {args.prediction_model!r} is reserved but not implemented yet. "
+            "Use --prediction-model default."
+        )
+    if args.prediction_model in (None, "default") and args.predicted_samples not in (None, 1):
+        raise ValueError("--prediction-model default currently supports only --predicted-samples 1")
+
     if not args.prompts_file.exists():
         print(_c(f"Prompt file not found: {args.prompts_file}", _Style.RED, _Style.BOLD))
         return 2
-    if not args.sd_script.exists():
-        print(_c(f"Gradient SD script not found: {args.sd_script}", _Style.RED, _Style.BOLD))
+    if not args.sdxl_script.exists():
+        print(_c(f"Approx SDXL script not found: {args.sdxl_script}", _Style.RED, _Style.BOLD))
         return 2
 
     prompts = load_prompts(args.prompts_file)
@@ -550,9 +580,9 @@ def main() -> int:
     with pipeline_config_path.open("w", encoding="utf-8") as f:
         json.dump(pipeline_config_payload, f, indent=2)
 
-    _title("Gradient SD Batch Runner")
+    _title("Approx SDXL Batch Runner")
     print(f"Prompt file : {args.prompts_file}")
-    print(f"Script      : {args.sd_script}")
+    print(f"Script      : {args.sdxl_script}")
     print(f"Runs        : {len(selected_prompts)} (from index {args.start_index})")
     print(f"Output root : {args.output_dir}")
     print(f"Log dir     : {log_dir}")
@@ -580,7 +610,7 @@ def main() -> int:
             run_name = f"run_{global_idx:04d}_{prompt_slug}"
             run_output_dir = args.output_dir / run_name
 
-            cmd = _build_sd_cmd(args, prompt, run_output_dir)
+            cmd = _build_sdxl_cmd(args, prompt, run_output_dir)
 
             print(_c(f"[{local_idx:03d}/{total_runs:03d}]", _Style.BOLD), _truncate(prompt, 100))
             print(_c("  output:", _Style.DIM), run_output_dir)

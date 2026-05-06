@@ -228,7 +228,12 @@ def parse_args() -> argparse.Namespace:
         default=sys.executable,
         help="Python executable used to launch gradient_sdxl.py.",
     )
-    parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "seg"])
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="pick",
+        choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
+    )
     parser.add_argument("--negative-prompt", type=str, default="")
     parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_batch"))
     parser.add_argument("--device", type=str, default="cuda")
@@ -448,7 +453,7 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
         # Fallback for environments without config dependencies.
         model = "stabilityai/stable-diffusion-xl-base-1.0"
         model_revision = ""
-        reward_fn = {"pick": "pick", "clip": "clip", "seg": "clip"}.get(args.config, args.config)
+        reward_fn = args.config
         seed = int(args.seed) if args.seed is not None else 42
         sample = {
             "num_steps": 100,

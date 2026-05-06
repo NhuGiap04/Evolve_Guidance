@@ -8,23 +8,23 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 from PIL import Image
-from diffusers import DDIMScheduler, DiffusionPipeline
+from diffusers import DDIMScheduler, StableDiffusionPipeline
 
-from config.sdxl import get_config
-from seg.diffusers_patch.gradient.pipeline_using_gradient_SDXL import pipeline_using_gradient_sdxl
+from config.sd import get_config
+from seg.diffusers_patch.approx.pipeline_using_approx_SD import pipeline_using_approx_sd
 from seg.rewards import FINAL_REWARD_SCORERS, build_final_reward_scorers, build_reward_scorer
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL Stein-guided sampling with per-step reward traces and plots."
+        description="Detailed SD approximate Stein-guided sampling with per-step reward traces and plots."
     )
     parser.add_argument(
         "--config",
         type=str,
         default="pick",
         choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
-        help="Config preset name from config/sdxl.py.",
+        help="Config preset name from config/sd.py.",
     )
     parser.add_argument(
         "--prompt",
@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="logs/sdxl",
+        default="logs/sd_approx",
         help="Directory for generated images, traces, and plots.",
     )
     parser.add_argument(
@@ -58,12 +58,25 @@ def parse_args():
     parser.add_argument("--eta", type=float, default=None, help="Optional DDIM eta override.")
 
     parser.add_argument("--num-particles", type=int, default=None, help="Optional number of particles override.")
-    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward-gradient micro-batch particle count.")
+    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward evaluation micro-batch particle count.")
     parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
     parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
+    parser.add_argument(
+        "--prediction-model",
+        type=str,
+        default=None,
+        choices=["default", "dpm", "lcm", "dmd"],
+        help="Model used to predict clean x0 samples for approximate guidance.",
+    )
+    parser.add_argument(
+        "--predicted-samples",
+        type=int,
+        default=None,
+        help="Number of predicted clean x0 samples per particle.",
+    )
     parser.add_argument(
         "--monitor-status",
         action="store_true",
@@ -103,7 +116,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def decode_latents_sdxl(pipe, latents):
+def decode_latents_sd(pipe, latents):
     needs_upcasting = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
 
     if needs_upcasting:
@@ -176,7 +189,7 @@ def _score_latents_in_batches(
         chunk_cpu = latents_cpu[offset : offset + batch_size]
         with torch.inference_mode():
             chunk_latents = chunk_cpu.to(device=device, dtype=inference_dtype)
-            chunk_images = decode_latents_sdxl(pipe, chunk_latents)
+            chunk_images = decode_latents_sd(pipe, chunk_latents)
             chunk_prompts = prompts[offset : offset + chunk_images.shape[0]]
             chunk_steer = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
             steer_chunks.append(chunk_steer)
@@ -216,7 +229,7 @@ def _save_intermediate_step_images(
             chunk = step_latents_cpu[offset : min(limit, offset + decode_batch_size)]
             with torch.inference_mode():
                 chunk_latents = chunk.to(device=device, dtype=inference_dtype)
-                chunk_images = decode_latents_sdxl(pipe, chunk_latents)
+                chunk_images = decode_latents_sd(pipe, chunk_latents)
                 chunk_prompts = [prompt] * chunk_images.shape[0]
                 chunk_scores = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
                 for local_idx, image in enumerate(chunk_images):
@@ -258,6 +271,15 @@ def main():
 
     if args.trace_eval_batch < 1:
         args.trace_eval_batch = 1
+    if args.predicted_samples is not None and args.predicted_samples < 1:
+        raise ValueError("--predicted-samples must be >= 1")
+    if args.prediction_model is not None and args.prediction_model != "default":
+        raise NotImplementedError(
+            f"--prediction-model {args.prediction_model!r} is reserved but not implemented yet. "
+            "Use --prediction-model default."
+        )
+    if args.prediction_model in (None, "default") and args.predicted_samples not in (None, 1):
+        raise ValueError("--prediction-model default currently supports only --predicted-samples 1")
 
     config = get_config(args.config)
     if args.seed is not None:
@@ -285,6 +307,10 @@ def main():
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
         config.sample.kl_coeff = args.kl_coeff
+    if args.prediction_model is not None:
+        config.sample.prediction_model = args.prediction_model
+    if args.predicted_samples is not None:
+        config.sample.predicted_samples = args.predicted_samples
     if args.monitor_status:
         config.sample.monitor_status = True
     if args.steer_start is not None:
@@ -301,22 +327,21 @@ def main():
         torch.cuda.manual_seed_all(config.seed)
 
     inference_dtype = torch.float16 if device.type == "cuda" else torch.float32
-    load_kwargs = {"torch_dtype": inference_dtype, "use_safetensors": True}
-    if inference_dtype == torch.float16:
-        load_kwargs["variant"] = "fp16"
-
-    pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
+    load_kwargs = {"torch_dtype": inference_dtype}
+    pipe = StableDiffusionPipeline.from_pretrained(
+        config.pretrained.model,
+        revision=config.pretrained.revision,
+        **load_kwargs,
+    ).to(device)
+    pipe.safety_checker = None
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
     pipe.enable_vae_slicing()
     pipe.enable_attention_slicing("max")
 
     # Keep VAE in fp32 for decode stability.
-    # Keep text encoders in UNet/inference dtype to avoid cross-attention dtype mismatch.
     pipe.vae.to(torch.float32)
     pipe.text_encoder.to(dtype=inference_dtype)
-    if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
-        pipe.text_encoder_2.to(dtype=inference_dtype)
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     final_scorers = build_final_reward_scorers(dtype=inference_dtype, device=device)
@@ -389,6 +414,8 @@ def main():
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
+        prediction_model=config.sample.prediction_model,
+        predicted_samples=config.sample.predicted_samples,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         verbose=args.verbose,
@@ -402,12 +429,12 @@ def main():
 
     inference_start = time.time()
     with torch.no_grad():
-        result = pipeline_using_gradient_sdxl(pipe, **call_kwargs)
+        result = pipeline_using_approx_sd(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
     with torch.no_grad():
-        final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
+        final_images = decode_latents_sd(pipe, final_latents.to(device=device, dtype=inference_dtype))
 
     for idx, image_tensor in enumerate(final_images):
         save_tensor_image(image_tensor, out_dir / f"sample_{idx:02d}.png")

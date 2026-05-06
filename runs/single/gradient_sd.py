@@ -11,7 +11,7 @@ from PIL import Image
 from diffusers import DDIMScheduler, StableDiffusionPipeline
 
 from config.sd import get_config
-from seg.diffusers_patch.pipeline_using_gradient_SD import pipeline_using_gradient_sd
+from seg.diffusers_patch.gradient.pipeline_using_gradient_SD import pipeline_using_gradient_sd
 from seg.rewards import FINAL_REWARD_SCORERS, build_final_reward_scorers, build_reward_scorer
 
 
@@ -23,7 +23,7 @@ def parse_args():
         "--config",
         type=str,
         default="pick",
-        choices=["pick", "clip", "seg"],
+        choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
         help="Config preset name from config/sd.py.",
     )
     parser.add_argument(

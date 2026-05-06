@@ -221,7 +221,7 @@ for t in timesteps:
 
 ## 8. Code Change Plan by File
 
-1. `seg/diffusers_patch/pipeline_using_gradient_SDXL.py` and `seg/diffusers_patch/pipeline_using_gradient_SD.py`
+1. `seg/diffusers_patch/gradient/pipeline_using_gradient_SDXL.py` and `seg/diffusers_patch/gradient/pipeline_using_gradient_SD.py`
 	- Implement full particle-aware Stein loop in denoising steps.
 	- Remove any remaining SMC bookkeeping assumptions.
 	- Add steering range argument handling (`steer_start`, `steer_end`).

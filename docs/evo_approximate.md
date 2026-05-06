@@ -195,7 +195,9 @@ $$
 Default kernel:
 
 $$
-k(x,x')=\exp\left(-\frac{\lVert x-x'\rVert_2^2}{\sigma_t}\right)
+k(x,x')=\exp\left(-\frac{\lVert x-x'\rVert_2^2}{h\sigma_t}\right),
+\quad
+h = \frac{\mathrm{median}_{i\neq j}\|u_i-u_j\|^2}{\log(K+1)+\delta}.
 \quad\text{(RBF)}.
 $$
 
@@ -271,10 +273,10 @@ The correction uses $\bar x_{0|t}$ from the Stein-refined latent, while the nois
 ## 9. Recommended Defaults
 
 - `num_particles (K) = 4`
-- `anchor_samples (L) = 1` to `4` per particle
+- `predicted_samples (L) = 1` to `4` per particle
 - `stein_loop (M) = 1`
 - `stein_step = 0.002` to `0.005`
 - `stein_adagrad_eps = 1e-8`
 - `stein_kernel = "rbf"` (default)
 - `alpha = kl_coeff`
-- `x0_anchor_model = "dpm"` when available; fallback to base $\hat x_{0|t}$
+- `prediction_model = "dpm"` when available; fallback to base $\hat x_{0|t}$ with `prediction_model = "default"`

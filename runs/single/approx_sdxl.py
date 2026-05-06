@@ -11,13 +11,13 @@ from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
 
 from config.sdxl import get_config
-from seg.diffusers_patch.gradient.pipeline_using_gradient_SDXL import pipeline_using_gradient_sdxl
+from seg.diffusers_patch.approx.pipeline_using_approx_SDXL import pipeline_using_approx_sdxl
 from seg.rewards import FINAL_REWARD_SCORERS, build_final_reward_scorers, build_reward_scorer
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL Stein-guided sampling with per-step reward traces and plots."
+        description="Detailed SDXL approximate Stein-guided sampling with per-step reward traces and plots."
     )
     parser.add_argument(
         "--config",
@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="logs/sdxl",
+        default="logs/sdxl_approx",
         help="Directory for generated images, traces, and plots.",
     )
     parser.add_argument(
@@ -58,12 +58,25 @@ def parse_args():
     parser.add_argument("--eta", type=float, default=None, help="Optional DDIM eta override.")
 
     parser.add_argument("--num-particles", type=int, default=None, help="Optional number of particles override.")
-    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward-gradient micro-batch particle count.")
+    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward evaluation micro-batch particle count.")
     parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
     parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
+    parser.add_argument(
+        "--prediction-model",
+        type=str,
+        default=None,
+        choices=["default", "dpm", "lcm", "dmd"],
+        help="Model used to predict clean x0 samples for approximate guidance.",
+    )
+    parser.add_argument(
+        "--predicted-samples",
+        type=int,
+        default=None,
+        help="Number of predicted clean x0 samples per particle.",
+    )
     parser.add_argument(
         "--monitor-status",
         action="store_true",
@@ -258,6 +271,15 @@ def main():
 
     if args.trace_eval_batch < 1:
         args.trace_eval_batch = 1
+    if args.predicted_samples is not None and args.predicted_samples < 1:
+        raise ValueError("--predicted-samples must be >= 1")
+    if args.prediction_model is not None and args.prediction_model != "default":
+        raise NotImplementedError(
+            f"--prediction-model {args.prediction_model!r} is reserved but not implemented yet. "
+            "Use --prediction-model default."
+        )
+    if args.prediction_model in (None, "default") and args.predicted_samples not in (None, 1):
+        raise ValueError("--prediction-model default currently supports only --predicted-samples 1")
 
     config = get_config(args.config)
     if args.seed is not None:
@@ -285,6 +307,10 @@ def main():
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
         config.sample.kl_coeff = args.kl_coeff
+    if args.prediction_model is not None:
+        config.sample.prediction_model = args.prediction_model
+    if args.predicted_samples is not None:
+        config.sample.predicted_samples = args.predicted_samples
     if args.monitor_status:
         config.sample.monitor_status = True
     if args.steer_start is not None:
@@ -389,6 +415,8 @@ def main():
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
+        prediction_model=config.sample.prediction_model,
+        predicted_samples=config.sample.predicted_samples,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         verbose=args.verbose,
@@ -402,7 +430,7 @@ def main():
 
     inference_start = time.time()
     with torch.no_grad():
-        result = pipeline_using_gradient_sdxl(pipe, **call_kwargs)
+        result = pipeline_using_approx_sdxl(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
