@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs SD batch generation (approximation/anchor mode) and logs output.
+# Override defaults via environment variables, e.g.:
+#   PYTHON_BIN=/venv/main/bin/python DEVICE=cuda:0 ./run_sd_batch_approx_logged.sh
+#   PYTHON_BIN=/venv/main/bin/python DEVICES="cuda:0 cuda:1" ./run_sd_batch_approx_logged.sh
+
+PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
+BATCH_SCRIPT="${BATCH_SCRIPT:-runs/gradient_sd_batch.py}"
+PROMPTS_FILE="${PROMPTS_FILE:-prompts/hps_v2_all_eval.txt}"
+OUTPUT_ROOT_DIR="${OUTPUT_DIR:-logs/sd_batch_approx}"
+CONFIG="${CONFIG:-pick}"
+EVAL_REWARD="${EVAL_REWARD:-image_reward}"
+DEVICE="${DEVICE:-cuda:0}"
+DEVICES="${DEVICES:-cuda:0}"
+NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
+
+NUM_STEPS="${NUM_STEPS:-100}"
+ETA="${ETA:-0.0}"
+NUM_PARTICLES="${NUM_PARTICLES:-4}"
+BATCH_P="${BATCH_P:-1}"
+STEIN_STEP="${STEIN_STEP:-0.005}"
+STEIN_LOOP="${STEIN_LOOP:-1}"
+STEIN_BANDWIDTH="${STEIN_BANDWIDTH:-}"
+STEER_START="${STEER_START:-0}"
+STEER_END="${STEER_END:-30}"
+REWARD_SCALE_FIXED="${REWARD_SCALE_FIXED:-}"
+SAVE_INTERMEDIATE_REWARDS="${SAVE_INTERMEDIATE_REWARDS:-0}"
+PLOT_AFTER_RUN="${PLOT_AFTER_RUN:-1}"
+PLOT_BLOCK="${PLOT_BLOCK:-1}"
+
+# Approximation anchor settings.
+X0_ANCHOR_MODEL="${X0_ANCHOR_MODEL:-dpm}"
+X0_ANCHOR_STEPS="${X0_ANCHOR_STEPS:-2}"
+X0_ANCHOR_LORA_PATH="${X0_ANCHOR_LORA_PATH:-}"
+X0_ANCHOR_LORA_SCALE="${X0_ANCHOR_LORA_SCALE:-1.0}"
+
+SAVE_INTERMEDIATE_REWARDS_ARG=""
+if [[ "$SAVE_INTERMEDIATE_REWARDS" == "1" || "$SAVE_INTERMEDIATE_REWARDS" == "true" ]]; then
+  SAVE_INTERMEDIATE_REWARDS_ARG="--save-intermediate-rewards"
+fi
+
+PLOT_AFTER_RUN_ARG="--plot-after-run"
+if [[ "$PLOT_AFTER_RUN" == "0" || "$PLOT_AFTER_RUN" == "false" ]]; then
+  PLOT_AFTER_RUN_ARG="--no-plot-after-run"
+fi
+
+PLOT_BLOCK_ARG="--plot-block"
+if [[ "$PLOT_BLOCK" == "0" || "$PLOT_BLOCK" == "false" ]]; then
+  PLOT_BLOCK_ARG="--no-plot-block"
+fi
+
+mkdir -p "$OUTPUT_ROOT_DIR"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+RUN_DIR_NAME="${RUN_DIR_NAME:-batch_${TIMESTAMP}_$$}"
+RUN_OUTPUT_DIR="$OUTPUT_ROOT_DIR/$RUN_DIR_NAME"
+mkdir -p "$RUN_OUTPUT_DIR"
+LOG_FILE="$RUN_OUTPUT_DIR/batch.log"
+
+echo "[INFO] Starting batch run"
+echo "[INFO] Output root: $OUTPUT_ROOT_DIR"
+echo "[INFO] Run output: $RUN_OUTPUT_DIR"
+echo "[INFO] Log file: $LOG_FILE"
+
+stein_bandwidth_args=()
+if [[ -n "$STEIN_BANDWIDTH" ]]; then
+  stein_bandwidth_args=(--stein-bandwidth "$STEIN_BANDWIDTH")
+fi
+reward_scale_fixed_args=()
+if [[ -n "$REWARD_SCALE_FIXED" ]]; then
+  reward_scale_fixed_args=(--reward-scale-fixed "$REWARD_SCALE_FIXED")
+fi
+anchor_args=()
+if [[ -n "$X0_ANCHOR_MODEL" ]]; then
+  anchor_args+=(--x0-anchor-model "$X0_ANCHOR_MODEL")
+fi
+if [[ -n "$X0_ANCHOR_STEPS" ]]; then
+  anchor_args+=(--x0-anchor-steps "$X0_ANCHOR_STEPS")
+fi
+if [[ -n "$X0_ANCHOR_LORA_PATH" ]]; then
+  anchor_args+=(--x0-anchor-lora-path "$X0_ANCHOR_LORA_PATH")
+fi
+if [[ -n "$X0_ANCHOR_LORA_SCALE" ]]; then
+  anchor_args+=(--x0-anchor-lora-scale "$X0_ANCHOR_LORA_SCALE")
+fi
+
+echo "[INFO] Approximation anchor"
+echo "  X0_ANCHOR_MODEL=$X0_ANCHOR_MODEL"
+echo "  X0_ANCHOR_STEPS=$X0_ANCHOR_STEPS"
+echo "  X0_ANCHOR_LORA_PATH=$X0_ANCHOR_LORA_PATH"
+echo "  X0_ANCHOR_LORA_SCALE=$X0_ANCHOR_LORA_SCALE"
+
+echo "[INFO] Command:"
+if [[ -n "$DEVICES" ]]; then
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+else
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+fi
+
+device_args=(--device "$DEVICE")
+if [[ -n "$DEVICES" ]]; then
+  # shellcheck disable=SC2206
+  device_list=($DEVICES)
+  device_args=(--devices "${device_list[@]}")
+fi
+
+python "$BATCH_SCRIPT" \
+  --prompts-file "$PROMPTS_FILE" \
+  --config "$CONFIG" \
+  --negative-prompt "$NEGATIVE_PROMPT" \
+  --output-dir "$RUN_OUTPUT_DIR" \
+  --eval-reward "$EVAL_REWARD" \
+  "${device_args[@]}" \
+  --num-steps "$NUM_STEPS" \
+  --eta "$ETA" \
+  --num-particles "$NUM_PARTICLES" \
+  --batch-p "$BATCH_P" \
+  --stein-step "$STEIN_STEP" \
+  --stein-loop "$STEIN_LOOP" \
+  "${stein_bandwidth_args[@]}" \
+  --steer-start "$STEER_START" \
+  --steer-end "$STEER_END" \
+  "${reward_scale_fixed_args[@]}" \
+  "${anchor_args[@]}" \
+  --verbose \
+  "$PLOT_AFTER_RUN_ARG" \
+  "$PLOT_BLOCK_ARG" \
+  ${SAVE_INTERMEDIATE_REWARDS_ARG:+$SAVE_INTERMEDIATE_REWARDS_ARG} \
+  2>&1 | tee "$LOG_FILE"
+
+echo "[INFO] Finished. Full log: $LOG_FILE"
+
+# Run evaluation script on the just-generated batch output
+EVAL_SCRIPT="eval_generated_outputs.py"
+if [ -f "$EVAL_SCRIPT" ]; then
+  echo "[INFO] Running evaluation on $RUN_OUTPUT_DIR"
+  "$PYTHON_BIN" "$EVAL_SCRIPT" --eval-root "$RUN_OUTPUT_DIR" --device "$DEVICE" --batch-size "$NUM_PARTICLES" --run-diversity
+else
+  echo "[WARN] $EVAL_SCRIPT not found, skipping evaluation."
+fi
