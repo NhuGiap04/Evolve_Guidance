@@ -126,3 +126,31 @@ Each run directory contains:
 - Deferred reward traces (`steer_trace.csv`) when `--save-intermediate-rewards` is enabled
 - Steer reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`) when enabled
 - Optional eval reward plots (`eval_before_after_mean.png`, `eval_before_after_max.png`) when enabled
+
+## GenEval metrics
+
+This repo can run the GenEval object-based evaluation on existing batch outputs.
+
+Setup (one time):
+
+```bash
+pip install -e ".[geneval]"
+git clone https://github.com/djghosh13/geneval.git
+cd geneval
+./evaluation/download_models.sh "<OBJECT_DETECTOR_FOLDER>/"
+```
+
+Run evaluation on a batch root:
+
+```bash
+python eval_geneval_outputs.py \
+  --eval-root logs/sd_batch/batch_20260424_111205_6101 \
+  --geneval-prompts path/to/geneval/prompts/evaluation_metadata.jsonl \
+  --geneval-repo path/to/geneval \
+  --geneval-model-path <OBJECT_DETECTOR_FOLDER> \
+  --samples-per-prompt 4
+```
+
+Notes:
+- GenEval requires CUDA and Mask2Former weights downloaded via `download_models.sh`.
+- The script matches prompts from `final_rewards.json` against the GenEval prompt set.

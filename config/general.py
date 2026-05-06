@@ -36,6 +36,7 @@ def general():
     sample.guidance_scale = 5.0
     # batch size (per GPU!) to use for sampling.
     sample.batch_size = 1
+    sample.reward_scale_fixed = None
 
     ###### Pretrained Model ######
     config.pretrained = pretrained = ml_collections.ConfigDict()

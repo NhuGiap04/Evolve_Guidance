@@ -223,6 +223,7 @@ def pipeline_using_gradient_sdxl(
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 1.0,
     reward_guidance_rho: float = 1.0,
+    reward_scale_fixed: Optional[float] = None,
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
@@ -697,6 +698,13 @@ def pipeline_using_gradient_sdxl(
                         pre_reward = reward_values
 
                     reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
+                    if reward_scale_fixed is not None:
+                        reward_scale = torch.full(
+                            (reward_grad.shape[0],) + (1,) * (reward_grad.ndim - 1),
+                            float(reward_scale_fixed),
+                            device=reward_grad.device,
+                            dtype=reward_grad.dtype,
+                        )
                     score_q = prior_score.float() + reward_scale * reward_grad.float()
 
                     if loop_idx == 0:

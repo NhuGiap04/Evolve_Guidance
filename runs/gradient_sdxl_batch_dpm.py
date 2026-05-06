@@ -325,6 +325,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
     _append_optional_arg(cmd, "--reward-guidance-rho", args.reward_guidance_rho)
+    _append_optional_arg(cmd, "--reward-scale-fixed", args.reward_scale_fixed)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
 
@@ -573,6 +574,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
+    parser.add_argument("--reward-guidance-rho", type=float, default=None)
+    parser.add_argument("--reward-scale-fixed", type=float, default=None)
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
 

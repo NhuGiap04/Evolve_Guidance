@@ -26,5 +26,16 @@ setup(
         "protobuf<4",
         "clip",
         "lpips",
-    ]
+    ],
+    extras_require={
+        "geneval": [
+            "mmdet==2.28.2",
+            "mmcv-full==1.7.1",
+            "open-clip-torch==2.20.0",
+            "clip-benchmark==1.4.0",
+            "pycocotools==2.0.6",
+            "pandas>=1.5.0",
+            "pillow>=9.0.0",
+        ]
+    }
 )
