@@ -85,6 +85,12 @@ def parse_args():
         help="Optional reward guidance coefficient multiplier override.",
     )
     parser.add_argument(
+        "--reward-scale-fixed",
+        type=float,
+        default=None,
+        help="Optional fixed reward scaling coefficient override.",
+    )
+    parser.add_argument(
         "--steer-start",
         type=int,
         default=None,
@@ -335,6 +341,8 @@ def main():
         config.sample.kl_coeff = args.kl_coeff
     if args.reward_guidance_rho is not None:
         config.sample.reward_guidance_rho = args.reward_guidance_rho
+    if args.reward_scale_fixed is not None:
+        config.sample.reward_scale_fixed = args.reward_scale_fixed
     if args.steer_start is not None:
         config.sample.steer_start = args.steer_start
     if args.steer_end is not None:
@@ -440,6 +448,7 @@ def main():
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
         reward_guidance_rho=config.sample.reward_guidance_rho,
+        reward_scale_fixed=config.sample.reward_scale_fixed,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         intermediate_rewards=(args.save_intermediate_rewards or args.show_intermediate_rewards),
