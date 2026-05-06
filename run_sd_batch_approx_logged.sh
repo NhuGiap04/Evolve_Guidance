@@ -8,6 +8,7 @@ set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
 BATCH_SCRIPT="${BATCH_SCRIPT:-runs/gradient_sd_batch.py}"
+SD_SCRIPT="${SD_SCRIPT:-runs/single/approximate_sd.py}"
 PROMPTS_FILE="${PROMPTS_FILE:-prompts/hps_v2_all_eval.txt}"
 OUTPUT_ROOT_DIR="${OUTPUT_DIR:-logs/sd_batch_approx}"
 CONFIG="${CONFIG:-pick}"
@@ -94,9 +95,9 @@ echo "  X0_ANCHOR_LORA_SCALE=$X0_ANCHOR_LORA_SCALE"
 
 echo "[INFO] Command:"
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -108,6 +109,7 @@ fi
 
 python "$BATCH_SCRIPT" \
   --prompts-file "$PROMPTS_FILE" \
+  --sd-script "$SD_SCRIPT" \
   --config "$CONFIG" \
   --negative-prompt "$NEGATIVE_PROMPT" \
   --output-dir "$RUN_OUTPUT_DIR" \
