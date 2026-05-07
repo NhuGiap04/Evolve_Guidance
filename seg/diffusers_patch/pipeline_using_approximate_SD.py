@@ -126,6 +126,10 @@ def _rbf_stein_vector_field(
     eps: float = 1e-8,
 ) -> torch.Tensor:
     # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
+    compute_dtype = torch.float32
+    latents = latents.to(dtype=compute_dtype)
+    score = score.to(device=latents.device, dtype=compute_dtype)
+
     if num_particles == 1:
         return score
 
@@ -144,12 +148,12 @@ def _rbf_stein_vector_field(
         dist2 = torch.cdist(x, x) ** 2
         positive_dist2 = dist2[dist2 > 0]
         if positive_dist2.numel() == 0:
-            h_bandwidth_group = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
+            h_bandwidth_group = torch.tensor(1.0, device=latents.device, dtype=compute_dtype)
         else:
             h_bandwidth_group = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
 
         if h_bandwidth is not None:
-            h_bandwidth_group = h_bandwidth_group * h_bandwidth.to(device=latents.device, dtype=latents.dtype)
+            h_bandwidth_group = h_bandwidth_group * h_bandwidth.to(device=latents.device, dtype=compute_dtype)
 
         h_bandwidth_group = torch.clamp(h_bandwidth_group, min=eps)
 
