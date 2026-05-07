@@ -631,9 +631,12 @@ def pipeline_using_approx_sd(
             log_weights = log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)
             weights = torch.softmax(log_weights, dim=1)
             if monitor_status:
+                reward_term = h_reward[None, :] / max(kl_coeff, 1e-6)
                 print(
                     f"t={t_int_local} "
                     f"group={group_idx} "
+                    f"log_forward_mean={log_forward.mean().item():.3f} "
+                    f"reward_term_mean={reward_term.mean().item():.3f} "
                     f"soft_good_weights={weights.detach().cpu().tolist()}"
                 )
             component_scores = -diff / one_minus_alpha_bar_t
