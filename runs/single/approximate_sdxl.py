@@ -138,6 +138,7 @@ def parse_args():
     parser.add_argument(
         "--detach-anchors",
         action="store_true",
+        default=True,
         help="Detach x0 anchors so reward does not backprop through anchor prediction.",
     )
 
@@ -663,6 +664,7 @@ def main():
         x0_anchor_lora_path=config.sample.x0_anchor_lora_path,
         x0_anchor_lora_scale=config.sample.x0_anchor_lora_scale,
         detach_reward_anchors=args.detach_anchors,
+        use_approximate_score=True,
         return_all_particles=True,
         return_dict=False,
     )

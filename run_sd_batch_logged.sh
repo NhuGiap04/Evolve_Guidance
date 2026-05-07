@@ -112,8 +112,9 @@ if [[ -n "$DEVICES" ]]; then
   device_args=(--devices "${device_list[@]}")
 fi
 
-python "$BATCH_SCRIPT" \
+"$PYTHON_BIN" "$BATCH_SCRIPT" \
   --prompts-file "$PROMPTS_FILE" \
+  --python "$PYTHON_BIN" \
   --config "$CONFIG" \
   --negative-prompt "$NEGATIVE_PROMPT" \
   --output-dir "$RUN_OUTPUT_DIR" \
@@ -142,7 +143,7 @@ echo "[INFO] Finished. Full log: $LOG_FILE"
 EVAL_SCRIPT="eval_generated_outputs.py"
 if [ -f "$EVAL_SCRIPT" ]; then
   echo "[INFO] Running evaluation on $RUN_OUTPUT_DIR"
-  python "$EVAL_SCRIPT" --eval-root "$RUN_OUTPUT_DIR" --device "$DEVICE" --batch-size "$NUM_PARTICLES" --run-diversity
+  "$PYTHON_BIN" "$EVAL_SCRIPT" --eval-root "$RUN_OUTPUT_DIR" --device "$DEVICE" --batch-size "$NUM_PARTICLES" --run-diversity
 else
   echo "[WARN] $EVAL_SCRIPT not found, skipping evaluation."
 fi

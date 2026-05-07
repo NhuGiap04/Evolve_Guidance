@@ -242,6 +242,7 @@ def pipeline_using_gradient_sdxl(
     x0_anchor_lora_path: Optional[str] = None,
     x0_anchor_lora_scale: float = 1.0,
     detach_reward_anchors: bool = False,
+    use_approximate_score: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
     """Run SDXL denoising with optional Stein particle transport guidance."""
@@ -504,6 +505,7 @@ def pipeline_using_gradient_sdxl(
         )
 
     use_stein = reward_fn is not None and stein_loop > 0 and stein_step > 0
+    use_approximate_score = bool(use_approximate_score and use_stein)
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
 
     x0_anchor_model = (x0_anchor_model or "base").lower().strip()
@@ -809,6 +811,69 @@ def pipeline_using_gradient_sdxl(
         rewards_out = torch.cat(all_rewards, dim=0) if return_rewards else None
         return rewards_out, torch.cat(all_grads, dim=0)
 
+    def _compute_anchor_rewards(
+        current_latents: torch.Tensor,
+        t: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if reward_fn is None or prompt_particles is None:
+            zeros = torch.zeros(current_latents.shape[0], device=current_latents.device, dtype=current_latents.dtype)
+            return zeros, current_latents
+
+        rewards: List[torch.Tensor] = []
+        anchors: List[torch.Tensor] = []
+        for start_idx in range(0, current_latents.shape[0], reward_chunk_size):
+            end_idx = start_idx + reward_chunk_size
+            lat_chunk = current_latents[start_idx:end_idx]
+
+            with torch.no_grad():
+                pred_x0_chunk = _predict_x0_anchor(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
+                if detach_reward_anchors:
+                    pred_x0_chunk = pred_x0_chunk.detach()
+                images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
+                reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
+
+            if not torch.is_tensor(reward_chunk):
+                reward_chunk = torch.tensor(reward_chunk, device=lat_chunk.device, dtype=lat_chunk.dtype)
+            reward_chunk = reward_chunk.to(device=lat_chunk.device, dtype=lat_chunk.dtype).flatten()
+            rewards.append(reward_chunk)
+            anchors.append(pred_x0_chunk.detach())
+
+        return torch.cat(rewards, dim=0), torch.cat(anchors, dim=0)
+
+    def _approximate_score(
+        current_latents: torch.Tensor,
+        anchors: torch.Tensor,
+        rewards: torch.Tensor,
+        t_int: int,
+    ) -> torch.Tensor:
+        alpha_bar_t = self.scheduler.alphas_cumprod[t_int].to(device=current_latents.device, dtype=current_latents.dtype)
+        sqrt_alpha_bar_t = torch.sqrt(torch.clamp(alpha_bar_t, min=1e-6))
+        var_t = torch.clamp(1.0 - alpha_bar_t, min=1e-6)
+
+        b, c, h, w = current_latents.shape
+        latents_grouped = current_latents.view(base_sample_count, num_particles, c, h, w)
+        anchors_grouped = anchors.view(base_sample_count, num_particles, c, h, w)
+        rewards_grouped = rewards.view(base_sample_count, num_particles)
+        output = torch.zeros_like(latents_grouped)
+
+        scale = max(float(kl_coeff), 1e-6)
+        for group_idx in range(base_sample_count):
+            x = latents_grouped[group_idx].reshape(num_particles, -1).float()
+            z = anchors_grouped[group_idx].reshape(num_particles, -1).float()
+            reward = rewards_grouped[group_idx].reshape(1, num_particles).float()
+
+            diff = x[:, None, :] - sqrt_alpha_bar_t.float() * z[None, :, :]
+            dist2 = (diff ** 2).sum(dim=2)
+            log_p = -dist2 / (2.0 * var_t.float())
+            log_a = log_p + (reward / scale)
+            weights = torch.softmax(log_a, dim=1)
+
+            score_ji = -(diff / var_t.float())
+            mixture = (weights.unsqueeze(-1) * score_ji).sum(dim=1)
+            output[group_idx] = mixture.view(num_particles, c, h, w).to(output.dtype)
+
+        return output.view(b, c, h, w)
+
     # Stein loop
     self._num_timesteps = len(timesteps)
     with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -848,24 +913,34 @@ def pipeline_using_gradient_sdxl(
                     if loop_idx == 0:
                         pre_stein_pred_x0 = _predict_x0_anchor(latents, t).detach().clone()
                     prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
-
-                    reward_values, reward_grad = _compute_reward_grad(
-                        latents,
-                        t,
-                        return_rewards=should_log_rewards and loop_idx == 0,
-                    )
+                    if use_approximate_score:
+                        reward_values, anchor_latents = _compute_anchor_rewards(latents, t)
+                        reward_grad = torch.zeros_like(latents)
+                    else:
+                        reward_values, reward_grad = _compute_reward_grad(
+                            latents,
+                            t,
+                            return_rewards=should_log_rewards and loop_idx == 0,
+                        )
                     if should_log_rewards and loop_idx == 0 and reward_values is not None:
                         pre_reward = reward_values
-
-                    reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
-                    if reward_scale_fixed is not None:
-                        reward_scale = torch.full(
+                    if use_approximate_score:
+                        score_q = _approximate_score(latents, anchor_latents, reward_values, t_int)
+                        reward_scale = torch.zeros(
                             (reward_grad.shape[0],) + (1,) * (reward_grad.ndim - 1),
-                            float(reward_scale_fixed),
                             device=reward_grad.device,
                             dtype=reward_grad.dtype,
                         )
-                    score_q = prior_score.float() + reward_scale * reward_grad.float()
+                    else:
+                        reward_scale = _reward_guidance_scale(prior_score, reward_grad, reward_guidance_rho)
+                        if reward_scale_fixed is not None:
+                            reward_scale = torch.full(
+                                (reward_grad.shape[0],) + (1,) * (reward_grad.ndim - 1),
+                                float(reward_scale_fixed),
+                                device=reward_grad.device,
+                                dtype=reward_grad.dtype,
+                            )
+                        score_q = prior_score.float() + reward_scale * reward_grad.float()
 
                     if loop_idx == 0:
                         pre_score_norm_mean, pre_score_norm_max = _score_norm_stats(prior_score)

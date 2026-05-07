@@ -107,9 +107,10 @@ if [[ -n "$DEVICES" ]]; then
   device_args=(--devices "${device_list[@]}")
 fi
 
-python "$BATCH_SCRIPT" \
+"$PYTHON_BIN" "$BATCH_SCRIPT" \
   --prompts-file "$PROMPTS_FILE" \
   --sd-script "$SD_SCRIPT" \
+  --python "$PYTHON_BIN" \
   --config "$CONFIG" \
   --negative-prompt "$NEGATIVE_PROMPT" \
   --output-dir "$RUN_OUTPUT_DIR" \
