@@ -249,6 +249,8 @@ def pipeline_using_approximate_sd(
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
     stein_bandwidth: str = "median",
+    stein_normalize: str = "full",
+    stein_schedule_correction: bool = True,
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
@@ -258,6 +260,7 @@ def pipeline_using_approximate_sd(
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
     intermediate_rewards: bool = False,
+    log_pipeline_params: bool = False,
     x0_anchor_model: str = "base",
     x0_anchor_steps: int = 1,
     x0_anchor_lora_path: Optional[str] = None,
@@ -314,6 +317,8 @@ def pipeline_using_approximate_sd(
         raise ValueError("reward_guidance_rho must be >= 0")
     if stein_bandwidth not in {"median", "sigma_t"}:
         raise ValueError("stein_bandwidth must be one of {'median', 'sigma_t'}")
+    if stein_normalize not in {"none", "full", "soft"}:
+        raise ValueError("stein_normalize must be one of {'none', 'full', 'soft'}")
     if x0_anchor_steps < 1:
         raise ValueError("x0_anchor_steps must be >= 1")
 
@@ -506,10 +511,54 @@ def pipeline_using_approximate_sd(
     use_stein = reward_fn is not None and stein_loop > 0 and stein_step > 0
     use_approximate_score = bool(use_approximate_score and use_stein)
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
+
+    def _pipeline_norm_stats(tensor: torch.Tensor) -> Tuple[float, float]:
+        norms = torch.linalg.vector_norm(tensor.detach().float().reshape(tensor.shape[0], -1), dim=1)
+        return float(norms.mean().item()), float(norms.max().item())
+
+    def _log_pipeline(message: str) -> None:
+        if log_pipeline_params:
+            print(f"[PIPELINE] {message}")
     
     # Debug: Log setup
     print(f"[DEBUG] Setup: use_stein={use_stein}, intermediate_rewards={intermediate_rewards}, "
           f"reward_fn_exists={reward_fn is not None}, stein_step={stein_step}, stein_loop={stein_loop}")
+    if log_pipeline_params:
+        _log_pipeline("effective parameters")
+        for name, value in {
+            "device": str(device),
+            "latent_dtype": str(latents.dtype),
+            "prompt_count": base_sample_count,
+            "height": height,
+            "width": width,
+            "num_inference_steps": total_inference_steps,
+            "guidance_scale": guidance_scale,
+            "eta": eta,
+            "num_particles": num_particles,
+            "batch_p": batch_p,
+            "reward_chunk_size": reward_chunk_size,
+            "use_stein": use_stein,
+            "use_approximate_score": use_approximate_score,
+            "stein_step": stein_step,
+            "stein_loop": stein_loop,
+            "stein_kernel": stein_kernel,
+            "stein_bandwidth": stein_bandwidth,
+            "stein_normalize": stein_normalize,
+            "stein_schedule_correction": stein_schedule_correction,
+            "stein_adagrad_eps": stein_adagrad_eps,
+            "stein_adagrad_clip": stein_adagrad_clip,
+            "kl_coeff": kl_coeff,
+            "reward_guidance_rho": reward_guidance_rho,
+            "reward_scale_fixed": reward_scale_fixed,
+            "steer_start": steer_start_effective,
+            "steer_end": steer_end_effective,
+            "x0_anchor_model": x0_anchor_model,
+            "x0_anchor_steps": x0_anchor_steps,
+            "detach_reward_anchors": detach_reward_anchors,
+            "return_all_particles": return_all_particles,
+            "output_type": output_type,
+        }.items():
+            _log_pipeline(f"  {name}={value}")
 
     intermediate_rewards_data: Dict[str, List[float]] = {
         "step_indices": [],
@@ -893,6 +942,14 @@ def pipeline_using_approximate_sd(
             t_int = _to_timestep_int(t)
             noise_pred = _predict_noise(latents, t)
             is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
+            if log_pipeline_params:
+                action = "apply_stein" if is_steered_step else "ddim_only"
+                reason = "inside steering window" if is_steered_step else "outside steering window or Stein disabled"
+                latent_mean, latent_max = _pipeline_norm_stats(latents)
+                _log_pipeline(
+                    f"step={i + 1}/{len(timesteps)} t={t_int} action={action} "
+                    f"reason={reason} latent_norm_mean={latent_mean:.6f} latent_norm_max={latent_max:.6f}"
+                )
 
             if hasattr(self.scheduler, "previous_timestep"):
                 prev_t = self.scheduler.previous_timestep(t)
@@ -955,6 +1012,10 @@ def pipeline_using_approximate_sd(
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
 
                 for loop_idx in range(stein_loop):
+                    _log_pipeline(
+                        f"  stein_loop={loop_idx + 1}/{stein_loop}: predict prior score and "
+                        f"{'approximate reward-tilted score' if use_approximate_score else 'reward gradient score'}"
+                    )
                     noise_pred_for_score = _predict_noise(latents, t)
                     pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
                     if loop_idx == 0:
@@ -1037,12 +1098,58 @@ def pipeline_using_approximate_sd(
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 
-                    grad_accumulator = grad_accumulator + stein_direction * stein_direction
-                    adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
-                    if stein_adagrad_clip is not None:
-                        adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+                    update_direction = stein_direction.float()
+                    if stein_normalize != "none":
+                        flat_direction = update_direction.reshape(update_direction.shape[0], -1)
+                        direction_norm = torch.linalg.vector_norm(flat_direction, dim=1)
+                        norm_shape = (update_direction.shape[0],) + (1,) * (update_direction.ndim - 1)
+                        direction_norm = direction_norm.reshape(norm_shape)
+                        if stein_normalize == "full":
+                            update_direction = update_direction / (direction_norm + stein_adagrad_eps)
+                        elif stein_normalize == "soft":
+                            update_direction = update_direction / (torch.sqrt(direction_norm) + stein_adagrad_eps)
 
-                    latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
+                    if stein_schedule_correction:
+                        update_direction = update_direction * sqrt_one_minus_alpha_bar_t.float()
+
+                    if stein_normalize == "none":
+                        grad_accumulator = grad_accumulator + stein_direction * stein_direction
+                        adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
+                        if stein_adagrad_clip is not None:
+                            adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+                        latent_update = adaptive_step * update_direction
+                        adaptive_mean, adaptive_max = _pipeline_norm_stats(adaptive_step)
+                    else:
+                        latent_update = stein_step * update_direction
+                        adaptive_mean = float(stein_step)
+                        adaptive_max = float(stein_step)
+
+                    if log_pipeline_params:
+                        stein_mean, stein_max = _pipeline_norm_stats(stein_direction)
+                        update_direction_mean, update_direction_max = _pipeline_norm_stats(update_direction)
+                        latent_update_mean, latent_update_max = _pipeline_norm_stats(latent_update)
+                        score_mean, score_max = _pipeline_norm_stats(score_q)
+                        prior_mean, prior_max = _pipeline_norm_stats(prior_score)
+                        bandwidth_value = "median"
+                        if h_bandwidth is not None:
+                            bandwidth_value = f"{float(h_bandwidth.detach().float().mean().item()):.8f}"
+                        schedule_scale = float(sqrt_one_minus_alpha_bar_t.detach().float().mean().item())
+                        _log_pipeline(
+                            "  applying_stein "
+                            f"normalize={stein_normalize} schedule_correction={stein_schedule_correction} "
+                            f"schedule_scale={schedule_scale:.8f} step_size={float(stein_step):.8f} "
+                            f"effective_step_mean={adaptive_mean:.8f} effective_step_max={adaptive_max:.8f} "
+                            f"kernel={stein_kernel} bandwidth={stein_bandwidth}:{bandwidth_value} "
+                            f"prior_score_norm_mean={prior_mean:.6f} prior_score_norm_max={prior_max:.6f} "
+                            f"score_q_norm_mean={score_mean:.6f} score_q_norm_max={score_max:.6f} "
+                            f"stein_vector_norm_mean={stein_mean:.6f} stein_vector_norm_max={stein_max:.6f} "
+                            f"update_direction_norm_mean={update_direction_mean:.6f} "
+                            f"update_direction_norm_max={update_direction_max:.6f} "
+                            f"latent_update_norm_mean={latent_update_mean:.6f} "
+                            f"latent_update_norm_max={latent_update_max:.6f}"
+                        )
+
+                    latents = latents + latent_update.to(latents.dtype)
 
                 if should_log_rewards:
                     if pre_reward is None:

@@ -16,6 +16,7 @@ from seg.diffusers_patch.pipeline_using_approximate_SDXL import pipeline_using_a
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
+from runs.gpu_logging import log_gpu_loads
 
 
 def parse_args():
@@ -72,6 +73,11 @@ def parse_args():
         choices=["none", "model", "sequential"],
         help="Enable CPU offload to reduce VRAM (requires accelerate).",
     )
+    parser.add_argument(
+        "--log-gpu-loads",
+        action="store_true",
+        help="Print CUDA memory and loaded model/scorer modules after major load stages.",
+    )
 
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
     parser.add_argument("--num-steps", type=int, default=None, help="Optional num inference steps override.")
@@ -84,6 +90,26 @@ def parse_args():
     parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
     parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
+    parser.add_argument(
+        "--stein-normalize",
+        type=str,
+        default=None,
+        choices=["none", "full", "soft"],
+        help="Normalize the Stein vector before applying the latent update.",
+    )
+    parser.add_argument(
+        "--stein-schedule-correction",
+        dest="stein_schedule_correction",
+        action="store_true",
+        default=None,
+        help="Scale the Stein update by sqrt(1 - alpha_bar_t).",
+    )
+    parser.add_argument(
+        "--no-stein-schedule-correction",
+        dest="stein_schedule_correction",
+        action="store_false",
+        help="Disable sqrt(1 - alpha_bar_t) scaling for the Stein update.",
+    )
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
@@ -502,6 +528,10 @@ def main():
         config.sample.stein_loop = args.stein_loop
     if args.stein_kernel is not None:
         config.sample.stein_kernel = args.stein_kernel
+    if args.stein_normalize is not None:
+        config.sample.stein_normalize = args.stein_normalize
+    if args.stein_schedule_correction is not None:
+        config.sample.stein_schedule_correction = args.stein_schedule_correction
     if args.stein_adagrad_eps is not None:
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
@@ -543,6 +573,8 @@ def main():
     torch.manual_seed(config.seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(config.seed)
+    if args.log_gpu_loads:
+        log_gpu_loads("startup")
 
     inference_dtype = torch.float16 if device.type == "cuda" else torch.float32
     if config.sample.x0_anchor_model == "dmd2" and config.sample.x0_anchor_lora_path is None:
@@ -580,11 +612,22 @@ def main():
     pipe.text_encoder.to(dtype=inference_dtype)
     if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
         pipe.text_encoder_2.to(dtype=inference_dtype)
+    if args.log_gpu_loads:
+        log_gpu_loads("after pipeline load", ("pipe", pipe))
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
+    if args.log_gpu_loads:
+        log_gpu_loads("after steering scorer load", ("pipe", pipe), ("steer_scorer", steer_scorer))
     eval_scorer = None
     if args.run_eval_now and args.eval_reward != "none":
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
+        if args.log_gpu_loads:
+            log_gpu_loads(
+                "after eval scorer load",
+                ("pipe", pipe),
+                ("steer_scorer", steer_scorer),
+                ("eval_scorer", eval_scorer),
+            )
 
     out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -611,6 +654,8 @@ def main():
         device=device,
         dtype=inference_dtype,
     )
+    if args.log_gpu_loads:
+        log_gpu_loads("after initial latent allocation", ("pipe", pipe), ("steer_scorer", steer_scorer))
 
     trace_entries = []
     step_latents_for_images = []
@@ -651,6 +696,8 @@ def main():
         stein_step=config.sample.stein_step,
         stein_loop=config.sample.stein_loop,
         stein_kernel=config.sample.stein_kernel,
+        stein_normalize=config.sample.stein_normalize,
+        stein_schedule_correction=config.sample.stein_schedule_correction,
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
@@ -695,6 +742,8 @@ def main():
 
     if device.type == "cuda":
         release_generation_modules(pipe)
+        if args.log_gpu_loads:
+            log_gpu_loads("after releasing generation modules", ("pipe", pipe), ("steer_scorer", steer_scorer))
 
     final_prompts = prompt_particles[: final_images.shape[0]]
     if len(final_prompts) != final_images.shape[0]:

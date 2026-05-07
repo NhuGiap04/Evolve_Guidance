@@ -228,6 +228,8 @@ def pipeline_using_approximate_sdxl(
     stein_step: float = 0.05,
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
+    stein_normalize: str = "full",
+    stein_schedule_correction: bool = True,
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 1.0,
@@ -293,6 +295,8 @@ def pipeline_using_approximate_sdxl(
         raise ValueError("stein_step must be >= 0")
     if reward_guidance_rho < 0:
         raise ValueError("reward_guidance_rho must be >= 0")
+    if stein_normalize not in {"none", "full", "soft"}:
+        raise ValueError("stein_normalize must be one of {'none', 'full', 'soft'}")
     if x0_anchor_steps < 1:
         raise ValueError("x0_anchor_steps must be >= 1")
 
@@ -957,12 +961,30 @@ def pipeline_using_approximate_sdxl(
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 
-                    grad_accumulator = grad_accumulator + stein_direction * stein_direction
-                    adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
-                    if stein_adagrad_clip is not None:
-                        adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+                    update_direction = stein_direction.float()
+                    if stein_normalize != "none":
+                        flat_direction = update_direction.reshape(update_direction.shape[0], -1)
+                        direction_norm = torch.linalg.vector_norm(flat_direction, dim=1)
+                        norm_shape = (update_direction.shape[0],) + (1,) * (update_direction.ndim - 1)
+                        direction_norm = direction_norm.reshape(norm_shape)
+                        if stein_normalize == "full":
+                            update_direction = update_direction / (direction_norm + stein_adagrad_eps)
+                        elif stein_normalize == "soft":
+                            update_direction = update_direction / (torch.sqrt(direction_norm) + stein_adagrad_eps)
 
-                    latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
+                    if stein_schedule_correction:
+                        update_direction = update_direction * sqrt_one_minus_alpha_bar_t.float()
+
+                    if stein_normalize == "none":
+                        grad_accumulator = grad_accumulator + stein_direction * stein_direction
+                        adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
+                        if stein_adagrad_clip is not None:
+                            adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+                        latent_update = adaptive_step * update_direction
+                    else:
+                        latent_update = stein_step * update_direction
+
+                    latents = latents + latent_update.to(latents.dtype)
 
                 if should_log_rewards:
                     if pre_reward is None:

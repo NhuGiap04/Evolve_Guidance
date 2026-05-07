@@ -15,6 +15,7 @@ from seg.diffusers_patch.pipeline_using_gradient_SD import pipeline_using_gradie
 from seg.scorers.ImageReward_scorer import ImageRewardScorer
 from seg.scorers.PickScore_scorer import PickScoreScorer
 from seg.scorers.clip_scorer import CLIPScorer
+from runs.gpu_logging import log_gpu_loads
 
 
 def parse_args():
@@ -70,6 +71,11 @@ def parse_args():
         default="none",
         choices=["none", "model", "sequential"],
         help="Enable CPU offload to reduce VRAM (requires accelerate).",
+    )
+    parser.add_argument(
+        "--log-gpu-loads",
+        action="store_true",
+        help="Print CUDA memory and loaded model/scorer modules after major load stages.",
     )
 
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
@@ -413,6 +419,8 @@ def main():
     torch.manual_seed(config.seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(config.seed)
+    if args.log_gpu_loads:
+        log_gpu_loads("startup")
 
     inference_dtype = torch.float16 if device.type == "cuda" else torch.float32
     load_kwargs = {"torch_dtype": inference_dtype}
@@ -438,11 +446,22 @@ def main():
     # Keep VAE in fp32 for decode stability.
     pipe.vae.to(torch.float32)
     pipe.text_encoder.to(dtype=inference_dtype)
+    if args.log_gpu_loads:
+        log_gpu_loads("after pipeline load", ("pipe", pipe))
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
+    if args.log_gpu_loads:
+        log_gpu_loads("after steering scorer load", ("pipe", pipe), ("steer_scorer", steer_scorer))
     eval_scorer = None
     if args.run_eval_now and args.eval_reward != "none":
         eval_scorer = build_reward_scorer(args.eval_reward, dtype=inference_dtype, device=device)
+        if args.log_gpu_loads:
+            log_gpu_loads(
+                "after eval scorer load",
+                ("pipe", pipe),
+                ("steer_scorer", steer_scorer),
+                ("eval_scorer", eval_scorer),
+            )
 
     out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -469,6 +488,8 @@ def main():
         device=device,
         dtype=inference_dtype,
     )
+    if args.log_gpu_loads:
+        log_gpu_loads("after initial latent allocation", ("pipe", pipe), ("steer_scorer", steer_scorer))
 
     trace_entries = []
     step_latents_for_images = []
@@ -552,6 +573,8 @@ def main():
 
     if device.type == "cuda":
         release_generation_modules(pipe)
+        if args.log_gpu_loads:
+            log_gpu_loads("after releasing generation modules", ("pipe", pipe), ("steer_scorer", steer_scorer))
 
     final_prompts = prompt_particles[: final_images.shape[0]]
     if len(final_prompts) != final_images.shape[0]:

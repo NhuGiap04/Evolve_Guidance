@@ -322,6 +322,11 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     _append_optional_arg(cmd, "--stein-step", args.stein_step)
     _append_optional_arg(cmd, "--stein-loop", args.stein_loop)
     _append_optional_arg(cmd, "--stein-kernel", args.stein_kernel)
+    _append_optional_arg(cmd, "--stein-normalize", args.stein_normalize)
+    if args.stein_schedule_correction is True:
+        cmd.append("--stein-schedule-correction")
+    elif args.stein_schedule_correction is False:
+        cmd.append("--no-stein-schedule-correction")
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
     _append_optional_arg(cmd, "--reward-guidance-rho", args.reward_guidance_rho)
@@ -343,6 +348,8 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     if args.plot_after_run:
         cmd.append("--show-intermediate-rewards")
     _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
+    if args.log_gpu_loads:
+        cmd.append("--log-gpu-loads")
 
     return cmd
 
@@ -579,6 +586,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-step", type=float, default=None)
     parser.add_argument("--stein-loop", type=int, default=None)
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
+    parser.add_argument("--stein-normalize", type=str, default=None, choices=["none", "full", "soft"])
+    parser.add_argument(
+        "--stein-schedule-correction",
+        dest="stein_schedule_correction",
+        action="store_true",
+        default=None,
+        help="Forward schedule correction scaling to the single-prompt worker.",
+    )
+    parser.add_argument(
+        "--no-stein-schedule-correction",
+        dest="stein_schedule_correction",
+        action="store_false",
+        help="Disable schedule correction scaling in the single-prompt worker.",
+    )
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--steer-start", type=int, default=None)
@@ -638,6 +659,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace-decode-batch-size", type=int, default=None)
     parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
+    parser.add_argument(
+        "--log-gpu-loads",
+        action="store_true",
+        help="Forward --log-gpu-loads to each single-prompt worker and save the output in stdout logs.",
+    )
 
     parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")
     parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")

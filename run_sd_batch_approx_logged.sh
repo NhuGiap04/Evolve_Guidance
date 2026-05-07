@@ -25,9 +25,13 @@ BATCH_P="${BATCH_P:-1}"
 STEIN_STEP="${STEIN_STEP:-0.005}"
 STEIN_LOOP="${STEIN_LOOP:-1}"
 STEIN_BANDWIDTH="${STEIN_BANDWIDTH:-}"
+STEIN_NORMALIZE="${STEIN_NORMALIZE:-full}"
+STEIN_SCHEDULE_CORRECTION="${STEIN_SCHEDULE_CORRECTION:-1}"
 STEER_START="${STEER_START:-0}"
 STEER_END="${STEER_END:-30}"
 REWARD_SCALE_FIXED="${REWARD_SCALE_FIXED:-}"
+LOG_PIPELINE_PARAMS="${LOG_PIPELINE_PARAMS:-1}"
+LOG_GPU_LOADS="${LOG_GPU_LOADS:-0}"
 SAVE_INTERMEDIATE_REWARDS="${SAVE_INTERMEDIATE_REWARDS:-0}"
 PLOT_AFTER_RUN="${PLOT_AFTER_RUN:-1}"
 PLOT_BLOCK="${PLOT_BLOCK:-1}"
@@ -69,9 +73,24 @@ stein_bandwidth_args=()
 if [[ -n "$STEIN_BANDWIDTH" ]]; then
   stein_bandwidth_args=(--stein-bandwidth "$STEIN_BANDWIDTH")
 fi
+stein_normalize_args=()
+if [[ -n "$STEIN_NORMALIZE" ]]; then
+  stein_normalize_args=(--stein-normalize "$STEIN_NORMALIZE")
+fi
+stein_schedule_args=(--stein-schedule-correction)
+if [[ "$STEIN_SCHEDULE_CORRECTION" == "0" || "$STEIN_SCHEDULE_CORRECTION" == "false" ]]; then
+  stein_schedule_args=(--no-stein-schedule-correction)
+fi
 reward_scale_fixed_args=()
 if [[ -n "$REWARD_SCALE_FIXED" ]]; then
   reward_scale_fixed_args=(--reward-scale-fixed "$REWARD_SCALE_FIXED")
+fi
+logging_args=()
+if [[ "$LOG_PIPELINE_PARAMS" == "1" || "$LOG_PIPELINE_PARAMS" == "true" ]]; then
+  logging_args+=(--log-pipeline-params)
+fi
+if [[ "$LOG_GPU_LOADS" == "1" || "$LOG_GPU_LOADS" == "true" ]]; then
+  logging_args+=(--log-gpu-loads)
 fi
 anchor_args=()
 if [[ -n "$X0_ANCHOR_MODEL" ]]; then
@@ -92,12 +111,20 @@ echo "  X0_ANCHOR_MODEL=$X0_ANCHOR_MODEL"
 echo "  X0_ANCHOR_STEPS=$X0_ANCHOR_STEPS"
 echo "  X0_ANCHOR_LORA_PATH=$X0_ANCHOR_LORA_PATH"
 echo "  X0_ANCHOR_LORA_SCALE=$X0_ANCHOR_LORA_SCALE"
+echo "[INFO] Stein update"
+echo "  STEIN_STEP=$STEIN_STEP"
+echo "  STEIN_LOOP=$STEIN_LOOP"
+echo "  STEIN_BANDWIDTH=$STEIN_BANDWIDTH"
+echo "  STEIN_NORMALIZE=$STEIN_NORMALIZE"
+echo "  STEIN_SCHEDULE_CORRECTION=$STEIN_SCHEDULE_CORRECTION"
+echo "  LOG_PIPELINE_PARAMS=$LOG_PIPELINE_PARAMS"
+echo "  LOG_GPU_LOADS=$LOG_GPU_LOADS"
 
 echo "[INFO] Command:"
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -124,10 +151,13 @@ fi
   --stein-step "$STEIN_STEP" \
   --stein-loop "$STEIN_LOOP" \
   "${stein_bandwidth_args[@]}" \
+  "${stein_normalize_args[@]}" \
+  "${stein_schedule_args[@]}" \
   --steer-start "$STEER_START" \
   --steer-end "$STEER_END" \
   "${reward_scale_fixed_args[@]}" \
   "${anchor_args[@]}" \
+  "${logging_args[@]}" \
   --verbose \
   "$PLOT_AFTER_RUN_ARG" \
   "$PLOT_BLOCK_ARG" \

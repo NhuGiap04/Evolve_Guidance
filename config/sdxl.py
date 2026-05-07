@@ -17,6 +17,8 @@ def seg():
     config.sample.stein_step = 0.02
     config.sample.stein_loop = 2
     config.sample.stein_kernel = "rbf"
+    config.sample.stein_normalize = "full"
+    config.sample.stein_schedule_correction = True
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
     config.sample.kl_coeff = 1.0

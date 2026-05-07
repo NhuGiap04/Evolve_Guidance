@@ -17,8 +17,11 @@ def seg():
     config.sample.stein_step = 0.02
     config.sample.stein_loop = 2
     config.sample.stein_kernel = "rbf"
+    config.sample.stein_normalize = "full"
+    config.sample.stein_schedule_correction = True
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
+    config.sample.log_pipeline_params = False
     config.sample.kl_coeff = 0.0001
     config.sample.reward_guidance_rho = 0.75
     config.sample.steer_start = None

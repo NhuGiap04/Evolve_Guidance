@@ -281,3 +281,60 @@ The correction uses $\bar x_{0|t}$ from the Stein-refined latent, while the nois
 - `x0_anchor_steps = 1` to `4` for DPM/LCM anchors
 - `x0_anchor_lora_path = null` (set when using LCM LoRA)
 - `x0_anchor_lora_scale = 1.0`
+
+
+## 10. Bandwidth Schedule for the RBF Kernel
+
+The RBF bandwidth $\sigma_t$ is computed per group at each steered timestep using a
+median heuristic over positive pairwise squared distances between particles:
+
+$$
+\hat{\sigma}_t
+=
+\frac{\mathrm{median}_{i\neq j}\left(\|x_t^{(i)}-x_t^{(j)}\|^2\,:\,\|x_t^{(i)}-x_t^{(j)}\|^2>0\right)}{\log(K+1)+\epsilon}
+$$
+
+If all pairwise distances are zero, $\hat{\sigma}_t$ is set to $1.0$ as a fallback.
+
+An optional scalar multiplier `h_bandwidth` $\in\mathbb{R}_{>0}$ can be applied:
+
+$$
+\tilde{\sigma}_t = \hat{\sigma}_t \cdot \texttt{h\_bandwidth}
+$$
+
+omitted (i.e. treated as $1.0$) when not specified.
+
+### Noise-Schedule Floor
+
+To prevent kernel collapse when particles converge late in the trajectory,
+a lower bound is imposed based on the diffusion noise schedule:
+
+$$
+\sigma_t = \max\!\left(\tilde{\sigma}_t,\;\lambda\cdot(1-\bar{\alpha}_t)\cdot d\right)
+$$
+
+where $d$ is the flattened latent dimension and $\lambda=$ `stein_bw_floor_scale`.
+
+### EMA Smoothing
+
+To reduce step-to-step jitter from the small particle count $K$,
+an exponential moving average is maintained across steered timesteps:
+
+$$
+\sigma_t \leftarrow \beta_\sigma\,\sigma_{t-1} + (1-\beta_\sigma)\,\sigma_t
+$$
+
+initialized at the first steered step as $\sigma_T = \tilde{\sigma}_T$.
+
+### Recommended Defaults
+
+- `stein_bw_floor_scale` $\lambda = 0.01$
+- `stein_bw_ema_decay` $\beta_\sigma = 0.8$
+- `h_bandwidth = null` (no manual override)
+
+### Notes
+
+The denominator $\log(K+1)$ produces a bandwidth approximately $1.7\times$ larger
+than the original Liu \& Wang (2016) factor $2\log K$ at $K=4$. This implicit
+upscaling partially compensates for the small inner-loop count $M=1$ and makes
+a separate $M$-correction factor unnecessary.
