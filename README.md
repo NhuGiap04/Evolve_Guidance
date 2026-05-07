@@ -11,7 +11,11 @@ pip install --no-deps image-reward
 
 ## Quick Start
 
-Run one SDXL prompt with gradient Stein guidance:
+### SDXL
+
+#### Gradient Stein Guidance
+
+Single prompt:
 
 ```bash
 python runs/single/gradient_sdxl.py \
@@ -27,7 +31,7 @@ python runs/single/gradient_sdxl.py \
   --output-dir logs/sdxl
 ```
 
-Run SDXL batch prompts with gradient Stein guidance:
+Batch prompts:
 
 ```bash
 python runs/gradient/sdxl_batch.py \
@@ -45,7 +49,9 @@ python runs/gradient/sdxl_batch.py \
   --output-dir logs/sdxl_batch
 ```
 
-Run one SDXL prompt with approximate soft good-probability guidance:
+#### Approximate Guidance
+
+Single prompt:
 
 ```bash
 python runs/single/approx_sdxl.py \
@@ -63,7 +69,7 @@ python runs/single/approx_sdxl.py \
   --output-dir logs/sdxl_approx
 ```
 
-Run SDXL batch prompts with approximate guidance:
+Batch prompts:
 
 ```bash
 python runs/approx/sdxl_batch.py \
@@ -83,7 +89,11 @@ python runs/approx/sdxl_batch.py \
   --output-dir logs/sdxl_approx_batch
 ```
 
-Run one SD 1.5 prompt with gradient Stein guidance:
+### Stable Diffusion 1.5
+
+#### Gradient Stein Guidance
+
+Single prompt:
 
 ```bash
 python runs/single/gradient_sd.py \
@@ -99,7 +109,7 @@ python runs/single/gradient_sd.py \
   --output-dir logs/sd
 ```
 
-Run SD 1.5 batch prompts with gradient Stein guidance:
+Batch prompts:
 
 ```bash
 python runs/gradient/sd_batch.py \
@@ -117,7 +127,9 @@ python runs/gradient/sd_batch.py \
   --output-dir logs/sd_batch
 ```
 
-Run one SD 1.5 prompt with approximate soft good-probability guidance:
+#### Approximate Guidance
+
+Single prompt:
 
 ```bash
 python runs/single/approx_sd.py \
@@ -135,7 +147,7 @@ python runs/single/approx_sd.py \
   --output-dir logs/sd_approx
 ```
 
-Run SD 1.5 batch prompts with approximate guidance:
+Batch prompts:
 
 ```bash
 python runs/approx/sd_batch.py \
