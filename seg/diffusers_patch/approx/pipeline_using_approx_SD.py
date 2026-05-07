@@ -635,8 +635,8 @@ def pipeline_using_approx_sd(
                 print(
                     f"t={t_int_local} "
                     f"group={group_idx} "
-                    f"log_forward_mean={log_forward.mean().item():.3f} "
-                    f"reward_term_mean={reward_term.mean().item():.3f} "
+                    f"log_forward={log_forward.detach().cpu().tolist()} "
+                    f"reward_term={reward_term.detach().cpu().tolist()} "
                     f"soft_good_weights={weights.detach().cpu().tolist()}"
                 )
             component_scores = -diff / one_minus_alpha_bar_t
