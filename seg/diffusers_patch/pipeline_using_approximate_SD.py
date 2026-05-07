@@ -1098,19 +1098,23 @@ def pipeline_using_approximate_sd(
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 
-                    update_direction = stein_direction.float()
+                    x_norm_mean, x_norm_max = _pipeline_norm_stats(latents)
+                    stein_before_normalize = stein_direction.float()
+                    stein_after_normalize = stein_before_normalize
                     if stein_normalize != "none":
-                        flat_direction = update_direction.reshape(update_direction.shape[0], -1)
+                        flat_direction = stein_after_normalize.reshape(stein_after_normalize.shape[0], -1)
                         direction_norm = torch.linalg.vector_norm(flat_direction, dim=1)
-                        norm_shape = (update_direction.shape[0],) + (1,) * (update_direction.ndim - 1)
+                        norm_shape = (stein_after_normalize.shape[0],) + (1,) * (stein_after_normalize.ndim - 1)
                         direction_norm = direction_norm.reshape(norm_shape)
                         if stein_normalize == "full":
-                            update_direction = update_direction / (direction_norm + stein_adagrad_eps)
+                            stein_after_normalize = stein_after_normalize / (direction_norm + stein_adagrad_eps)
                         elif stein_normalize == "soft":
-                            update_direction = update_direction / (torch.sqrt(direction_norm) + stein_adagrad_eps)
+                            stein_after_normalize = stein_after_normalize / (torch.sqrt(direction_norm) + stein_adagrad_eps)
 
+                    schedule_coeff = float(sqrt_one_minus_alpha_bar_t.detach().float().mean().item())
+                    update_direction = stein_after_normalize
                     if stein_schedule_correction:
-                        update_direction = update_direction * sqrt_one_minus_alpha_bar_t.float()
+                        update_direction = stein_after_normalize * sqrt_one_minus_alpha_bar_t.float()
 
                     if stein_normalize == "none":
                         grad_accumulator = grad_accumulator + stein_direction * stein_direction
@@ -1119,13 +1123,18 @@ def pipeline_using_approximate_sd(
                             adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
                         latent_update = adaptive_step * update_direction
                         adaptive_mean, adaptive_max = _pipeline_norm_stats(adaptive_step)
+                        total_step_coeff_mean = adaptive_mean * (schedule_coeff if stein_schedule_correction else 1.0)
+                        total_step_coeff_max = adaptive_max * (schedule_coeff if stein_schedule_correction else 1.0)
                     else:
                         latent_update = stein_step * update_direction
                         adaptive_mean = float(stein_step)
                         adaptive_max = float(stein_step)
+                        total_step_coeff_mean = float(stein_step) * (schedule_coeff if stein_schedule_correction else 1.0)
+                        total_step_coeff_max = total_step_coeff_mean
 
                     if log_pipeline_params:
-                        stein_mean, stein_max = _pipeline_norm_stats(stein_direction)
+                        stein_before_mean, stein_before_max = _pipeline_norm_stats(stein_before_normalize)
+                        stein_after_norm_mean, stein_after_norm_max = _pipeline_norm_stats(stein_after_normalize)
                         update_direction_mean, update_direction_max = _pipeline_norm_stats(update_direction)
                         latent_update_mean, latent_update_max = _pipeline_norm_stats(latent_update)
                         score_mean, score_max = _pipeline_norm_stats(score_q)
@@ -1133,18 +1142,25 @@ def pipeline_using_approximate_sd(
                         bandwidth_value = "median"
                         if h_bandwidth is not None:
                             bandwidth_value = f"{float(h_bandwidth.detach().float().mean().item()):.8f}"
-                        schedule_scale = float(sqrt_one_minus_alpha_bar_t.detach().float().mean().item())
                         _log_pipeline(
                             "  applying_stein "
                             f"normalize={stein_normalize} schedule_correction={stein_schedule_correction} "
-                            f"schedule_scale={schedule_scale:.8f} step_size={float(stein_step):.8f} "
-                            f"effective_step_mean={adaptive_mean:.8f} effective_step_max={adaptive_max:.8f} "
+                            f"x_norm_mean={x_norm_mean:.6f} x_norm_max={x_norm_max:.6f} "
+                            f"fixed_stein_step={float(stein_step):.8f} "
+                            f"schedule_coeff={schedule_coeff:.8f} "
+                            f"adaptive_step_coeff_mean={adaptive_mean:.8f} "
+                            f"adaptive_step_coeff_max={adaptive_max:.8f} "
+                            f"total_step_coeff_mean={total_step_coeff_mean:.8f} "
+                            f"total_step_coeff_max={total_step_coeff_max:.8f} "
                             f"kernel={stein_kernel} bandwidth={stein_bandwidth}:{bandwidth_value} "
                             f"prior_score_norm_mean={prior_mean:.6f} prior_score_norm_max={prior_max:.6f} "
                             f"score_q_norm_mean={score_mean:.6f} score_q_norm_max={score_max:.6f} "
-                            f"stein_vector_norm_mean={stein_mean:.6f} stein_vector_norm_max={stein_max:.6f} "
-                            f"update_direction_norm_mean={update_direction_mean:.6f} "
-                            f"update_direction_norm_max={update_direction_max:.6f} "
+                            f"stein_vector_before_norm_mean={stein_before_mean:.6f} "
+                            f"stein_vector_before_norm_max={stein_before_max:.6f} "
+                            f"stein_vector_after_normalize_mean={stein_after_norm_mean:.6f} "
+                            f"stein_vector_after_normalize_max={stein_after_norm_max:.6f} "
+                            f"stein_vector_after_schedule_mean={update_direction_mean:.6f} "
+                            f"stein_vector_after_schedule_max={update_direction_max:.6f} "
                             f"latent_update_norm_mean={latent_update_mean:.6f} "
                             f"latent_update_norm_max={latent_update_max:.6f}"
                         )
