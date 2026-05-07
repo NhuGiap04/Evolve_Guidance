@@ -85,19 +85,13 @@ def parse_args():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Decode and save deferred intermediate images from saved trace latents.",
+        help="Decode and save deferred reward traces.",
     )
     parser.add_argument(
         "--trace-eval-batch",
         type=int,
         default=1,
-        help="How many latent samples to decode/score at once for deferred trace reward evaluation and intermediate decode.",
-    )
-    parser.add_argument(
-        "--intermediate-max-samples",
-        type=int,
-        default=None,
-        help="Optional cap on samples to save per step when --verbose is used.",
+        help="How many latent samples to decode/score at once for deferred trace reward evaluation.",
     )
 
     return parser.parse_args()
@@ -187,49 +181,6 @@ def _score_latents_in_batches(
     if steer_chunks:
         return torch.cat(steer_chunks, dim=0)
     return torch.empty(0, dtype=torch.float32)
-
-
-def _save_intermediate_step_images(
-    step_latents_cpu_list,
-    intermediate_out_dir,
-    pipe,
-    steer_scorer,
-    prompt,
-    device,
-    inference_dtype,
-    decode_batch_size,
-    intermediate_max_samples,
-):
-    if decode_batch_size < 1:
-        decode_batch_size = 1
-
-    sample_cap = None
-    if intermediate_max_samples is not None:
-        sample_cap = max(intermediate_max_samples, 0)
-
-    for step_idx, step_latents_cpu in enumerate(step_latents_cpu_list, start=1):
-        if sample_cap == 0:
-            continue
-
-        limit = step_latents_cpu.shape[0] if sample_cap is None else min(step_latents_cpu.shape[0], sample_cap)
-        for offset in range(0, limit, decode_batch_size):
-            chunk = step_latents_cpu[offset : min(limit, offset + decode_batch_size)]
-            with torch.inference_mode():
-                chunk_latents = chunk.to(device=device, dtype=inference_dtype)
-                chunk_images = decode_latents_sd(pipe, chunk_latents)
-                chunk_prompts = [prompt] * chunk_images.shape[0]
-                chunk_scores = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
-                for local_idx, image in enumerate(chunk_images):
-                    sample_idx = offset + local_idx
-                    steer_score = float(chunk_scores[local_idx].item())
-                    file_name = (
-                        f"step_{step_idx:03d}_sample_{sample_idx:03d}"
-                        f"_steer_{steer_score:.6f}.png"
-                    )
-                    save_tensor_image(image, intermediate_out_dir / file_name)
-
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
 
 
 def _score_stats(scores: torch.Tensor):
@@ -322,9 +273,6 @@ def main():
 
     out_dir = Path(args.output_dir) / f"{args.config}_seed{config.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    intermediate_out_dir = out_dir / "intermediate_images"
-    if args.verbose:
-        intermediate_out_dir.mkdir(parents=True, exist_ok=True)
 
     prompts = [args.prompt] * config.sample.batch_size
     prompt_particles = _expand_prompts_for_particles(prompts, config.sample.num_particles)
@@ -347,15 +295,9 @@ def main():
     )
 
     trace_entries = []
-    step_latents_for_images = []
     trace_storage_dtype = torch.float16 if inference_dtype == torch.float16 else torch.float32
 
     def collect_step_latents(_pipe, step_idx, timestep, callback_kwargs):
-        if args.verbose:
-            latents_at_step = callback_kwargs.get("latents")
-            if latents_at_step is not None:
-                step_latents_for_images.append(latents_at_step.detach().to("cpu", dtype=trace_storage_dtype))
-
         if args.verbose:
             pre_x0 = callback_kwargs.get("pre_stein_pred_x0")
             post_x0 = callback_kwargs.get("post_stein_pred_x0")
@@ -397,7 +339,7 @@ def main():
     )
     if args.verbose:
         call_kwargs["callback_on_step_end"] = collect_step_latents
-        call_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+        call_kwargs["callback_on_step_end_tensor_inputs"] = []
 
     inference_start = time.time()
     with torch.no_grad():
@@ -533,19 +475,6 @@ def main():
                 ylabel="Reward",
                 out_path=out_dir / "steer_before_after_max.png",
             )
-
-    if args.verbose and len(step_latents_for_images) > 0:
-        _save_intermediate_step_images(
-            step_latents_cpu_list=step_latents_for_images,
-            intermediate_out_dir=intermediate_out_dir,
-            pipe=pipe,
-            steer_scorer=steer_scorer,
-            prompt=args.prompt,
-            device=device,
-            inference_dtype=inference_dtype,
-            decode_batch_size=args.trace_eval_batch,
-            intermediate_max_samples=args.intermediate_max_samples,
-        )
 
     print("Saved outputs to:", out_dir)
     print(f"Inference time (pipeline only): {inference_elapsed:.4f}s")

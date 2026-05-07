@@ -162,7 +162,6 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path) -
 
     if args.verbose:
         cmd.append("--verbose")
-        _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
         _append_optional_arg(cmd, "--trace-eval-batch", args.trace_eval_batch)
 
     return cmd
@@ -257,7 +256,6 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--trace-eval-batch", type=int, default=None)
-    parser.add_argument("--intermediate-max-samples", type=int, default=None)
 
     parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")
     parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")

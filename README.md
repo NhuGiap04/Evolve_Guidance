@@ -173,7 +173,7 @@ Useful flags:
 - `--stop-on-error`: stop on first failed prompt.
 - `--dry-run`: print commands without running them.
 - `--monitor-status`: print per-step latent steering stats. Gradient runners report reward-gradient diagnostics; approx runners report soft good-score diagnostics.
-- `--verbose --trace-eval-batch 1`: save deferred intermediate reward traces and control intermediate-image decode batching.
+- `--verbose --trace-eval-batch 1`: save deferred reward traces and control trace decode/eval batching.
 
 Batch outputs:
 
@@ -218,8 +218,7 @@ SD default checkpoint:
 - `--stop-on-error`: stop on first failing run
 - `--dry-run`: print generated commands only
 - `--log-dir`: override batch log directory
-- `--trace-eval-batch`: decode/eval micro-batch size for deferred reward traces and intermediate image saving
-- `--intermediate-max-samples`: max samples per step for intermediate image dumps
+- `--trace-eval-batch`: decode/eval micro-batch size for deferred reward traces
 
 ### Outputs
 
