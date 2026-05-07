@@ -351,6 +351,11 @@ def _build_sd_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path, d
         cmd.append("--save-intermediate-images")
         _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
         _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
+    if args.save_x0_anchor_images:
+        cmd.append("--save-x0-anchor-images")
+        _append_optional_arg(cmd, "--x0-anchor-image-steps", args.x0_anchor_image_steps)
+        _append_optional_arg(cmd, "--trace-decode-batch-size", args.trace_decode_batch_size)
+        _append_optional_arg(cmd, "--intermediate-max-samples", args.intermediate_max_samples)
     if args.save_intermediate_rewards and not args.plot_after_run:
         cmd.append("--save-intermediate-rewards")
     if args.plot_after_run:
@@ -663,6 +668,17 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--save-intermediate-images", action="store_true")
     parser.add_argument("--save-intermediate-rewards", action="store_true")
+    parser.add_argument(
+        "--save-x0-anchor-images",
+        action="store_true",
+        help="Forward --save-x0-anchor-images to each single-prompt worker.",
+    )
+    parser.add_argument(
+        "--x0-anchor-image-steps",
+        type=int,
+        default=None,
+        help="Number of early steered steps to save in each single-prompt worker.",
+    )
     parser.add_argument(
         "--plot-after-run",
         action="store_true",

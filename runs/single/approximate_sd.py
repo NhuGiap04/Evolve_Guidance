@@ -212,6 +212,17 @@ def parse_args():
         default=None,
         help="Optional cap on samples to save per step when --save-intermediate-images is used.",
     )
+    parser.add_argument(
+        "--save-x0-anchor-images",
+        action="store_true",
+        help="Decode and save x0 anchor images from early steered steps for pipeline verification.",
+    )
+    parser.add_argument(
+        "--x0-anchor-image-steps",
+        type=int,
+        default=2,
+        help="Number of early steered steps to save when --save-x0-anchor-images is used.",
+    )
 
     return parser.parse_args()
 
@@ -370,6 +381,49 @@ def _save_intermediate_step_images(
 
         if device.type == "cuda":
             torch.cuda.empty_cache()
+
+
+def _save_x0_anchor_images(
+    anchor_trace_entries,
+    out_dir,
+    pipe,
+    device,
+    inference_dtype,
+    decode_batch_size,
+    max_samples,
+):
+    if not anchor_trace_entries:
+        return
+
+    anchor_dir = out_dir / "x0_anchor_images"
+    anchor_dir.mkdir(parents=True, exist_ok=True)
+
+    for entry in anchor_trace_entries:
+        step_idx = entry["step_index"]
+        t_value = entry["timestep"]
+        step_dir = anchor_dir / f"step_{step_idx:03d}_t{t_value:04d}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+
+        for phase in ("pre", "post"):
+            latents_cpu = entry[f"{phase}_x0_latents_cpu"]
+            if max_samples is not None:
+                latents_cpu = latents_cpu[:max_samples]
+
+            sample_offset = 0
+            for offset in range(0, latents_cpu.shape[0], decode_batch_size):
+                chunk_cpu = latents_cpu[offset : offset + decode_batch_size]
+                with torch.no_grad():
+                    images = decode_latents_sd(pipe, chunk_cpu.to(device=device, dtype=inference_dtype))
+
+                for image_tensor in images:
+                    img_path = step_dir / f"{phase}_x0_anchor_sample_{sample_offset:02d}.png"
+                    save_tensor_image(image_tensor, img_path)
+                    sample_offset += 1
+
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+
+    print(f"[INFO] Saved x0 anchor images: {anchor_dir}")
 
 
 def _save_intermediate_step_rewards(
@@ -650,6 +704,7 @@ def main():
         log_gpu_loads("after initial latent allocation", ("pipe", pipe), ("steer_scorer", steer_scorer))
 
     trace_entries = []
+    x0_anchor_trace_entries = []
     step_latents_for_images = []
     trace_storage_dtype = torch.float16 if inference_dtype == torch.float16 else torch.float32
 
@@ -665,6 +720,19 @@ def main():
             if pre_x0 is not None and post_x0 is not None:
                 t_value = int(timestep.item()) if torch.is_tensor(timestep) else int(timestep)
                 trace_entries.append(
+                    {
+                        "step_index": int(step_idx),
+                        "timestep": t_value,
+                        "pre_x0_latents_cpu": pre_x0.detach().to("cpu", dtype=trace_storage_dtype),
+                        "post_x0_latents_cpu": post_x0.detach().to("cpu", dtype=trace_storage_dtype),
+                    }
+                )
+        if args.save_x0_anchor_images and len(x0_anchor_trace_entries) < args.x0_anchor_image_steps:
+            pre_x0 = callback_kwargs.get("pre_stein_pred_x0")
+            post_x0 = callback_kwargs.get("post_stein_pred_x0")
+            if pre_x0 is not None and post_x0 is not None:
+                t_value = int(timestep.item()) if torch.is_tensor(timestep) else int(timestep)
+                x0_anchor_trace_entries.append(
                     {
                         "step_index": int(step_idx),
                         "timestep": t_value,
@@ -709,7 +777,7 @@ def main():
         return_all_particles=True,
         return_dict=False,
     )
-    if args.save_intermediate_images or args.save_intermediate_rewards:
+    if args.save_intermediate_images or args.save_intermediate_rewards or args.save_x0_anchor_images:
         call_kwargs["callback_on_step_end"] = collect_step_latents
         call_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
 
@@ -794,6 +862,17 @@ def main():
             pipe,
             steer_scorer,
             args.prompt,
+            device,
+            inference_dtype,
+            args.trace_decode_batch_size,
+            args.intermediate_max_samples,
+        )
+
+    if args.save_x0_anchor_images:
+        _save_x0_anchor_images(
+            x0_anchor_trace_entries,
+            out_dir,
+            pipe,
             device,
             inference_dtype,
             args.trace_decode_batch_size,

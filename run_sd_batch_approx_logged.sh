@@ -33,6 +33,8 @@ REWARD_SCALE_FIXED="${REWARD_SCALE_FIXED:-}"
 LOG_PIPELINE_PARAMS="${LOG_PIPELINE_PARAMS:-1}"
 LOG_GPU_LOADS="${LOG_GPU_LOADS:-1}"
 SAVE_INTERMEDIATE_REWARDS="${SAVE_INTERMEDIATE_REWARDS:-0}"
+SAVE_X0_ANCHOR_IMAGES="${SAVE_X0_ANCHOR_IMAGES:-1}"
+X0_ANCHOR_IMAGE_STEPS="${X0_ANCHOR_IMAGE_STEPS:-2}"
 PLOT_AFTER_RUN="${PLOT_AFTER_RUN:-1}"
 PLOT_BLOCK="${PLOT_BLOCK:-1}"
 
@@ -45,6 +47,10 @@ X0_ANCHOR_LORA_SCALE="${X0_ANCHOR_LORA_SCALE:-1.0}"
 SAVE_INTERMEDIATE_REWARDS_ARG=""
 if [[ "$SAVE_INTERMEDIATE_REWARDS" == "1" || "$SAVE_INTERMEDIATE_REWARDS" == "true" ]]; then
   SAVE_INTERMEDIATE_REWARDS_ARG="--save-intermediate-rewards"
+fi
+SAVE_X0_ANCHOR_IMAGES_ARG=""
+if [[ "$SAVE_X0_ANCHOR_IMAGES" == "1" || "$SAVE_X0_ANCHOR_IMAGES" == "true" ]]; then
+  SAVE_X0_ANCHOR_IMAGES_ARG="--save-x0-anchor-images --x0-anchor-image-steps $X0_ANCHOR_IMAGE_STEPS"
 fi
 
 PLOT_AFTER_RUN_ARG="--plot-after-run"
@@ -119,12 +125,14 @@ echo "  STEIN_NORMALIZE=$STEIN_NORMALIZE"
 echo "  STEIN_SCHEDULE_CORRECTION=$STEIN_SCHEDULE_CORRECTION"
 echo "  LOG_PIPELINE_PARAMS=$LOG_PIPELINE_PARAMS"
 echo "  LOG_GPU_LOADS=$LOG_GPU_LOADS"
+echo "  SAVE_X0_ANCHOR_IMAGES=$SAVE_X0_ANCHOR_IMAGES"
+echo "  X0_ANCHOR_IMAGE_STEPS=$X0_ANCHOR_IMAGE_STEPS"
 
 echo "[INFO] Command:"
 if [[ -n "$DEVICES" ]]; then
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --devices $DEVICES --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG} ${SAVE_X0_ANCHOR_IMAGES_ARG}"
 else
-  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG}"
+  echo "  $PYTHON_BIN $BATCH_SCRIPT --prompts-file $PROMPTS_FILE --sd-script $SD_SCRIPT --config $CONFIG --negative-prompt \"$NEGATIVE_PROMPT\" --output-dir $RUN_OUTPUT_DIR --eval-reward $EVAL_REWARD --offload $OFFLOAD --device $DEVICE --num-steps $NUM_STEPS --eta $ETA --num-particles $NUM_PARTICLES --batch-p $BATCH_P --stein-step $STEIN_STEP --stein-loop $STEIN_LOOP ${stein_bandwidth_args[*]} ${stein_normalize_args[*]} ${stein_schedule_args[*]} --steer-start $STEER_START --steer-end $STEER_END ${reward_scale_fixed_args[*]} ${anchor_args[*]} ${logging_args[*]} --verbose $PLOT_AFTER_RUN_ARG $PLOT_BLOCK_ARG ${SAVE_INTERMEDIATE_REWARDS_ARG} ${SAVE_X0_ANCHOR_IMAGES_ARG}"
 fi
 
 device_args=(--device "$DEVICE")
@@ -162,6 +170,7 @@ fi
   "$PLOT_AFTER_RUN_ARG" \
   "$PLOT_BLOCK_ARG" \
   ${SAVE_INTERMEDIATE_REWARDS_ARG:+$SAVE_INTERMEDIATE_REWARDS_ARG} \
+  ${SAVE_X0_ANCHOR_IMAGES_ARG:+$SAVE_X0_ANCHOR_IMAGES_ARG} \
   2>&1 | tee "$LOG_FILE"
 
 echo "[INFO] Finished. Full log: $LOG_FILE"
