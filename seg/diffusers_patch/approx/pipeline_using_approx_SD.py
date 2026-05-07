@@ -668,9 +668,7 @@ def pipeline_using_approx_sd(
                     intermediate_rewards_data["timesteps"].append(float(t_int))
 
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
-                last_score_p_t = None
-                last_score_q_t = None
-                last_good_score = None
+                last_steer_score = None
 
                 for loop_idx in range(stein_loop):
                     if loop_idx == 0:
@@ -689,18 +687,15 @@ def pipeline_using_approx_sd(
                     if verbose and loop_idx == 0 and reward_values is not None:
                         pre_reward = reward_values
 
-                    score_p_t = good_score.float()
-                    score_q = score_p_t
-                    last_score_p_t = score_p_t
-                    last_score_q_t = score_q
-                    last_good_score = good_score
+                    steer_score = good_score.float()
+                    last_steer_score = steer_score
 
                     if stein_kernel != "rbf":
                         raise ValueError(f"Unsupported stein_kernel: {stein_kernel}. Only 'rbf' is currently supported.")
 
                     stein_direction = _rbf_stein_vector_field(
                         latents=latents.float(),
-                        score=score_q,
+                        score=steer_score,
                         base_sample_count=base_sample_count,
                         num_particles=num_particles,
                     )
@@ -719,22 +714,18 @@ def pipeline_using_approx_sd(
                     rel_delta = (delta / (base + 1e-8)).mean()
                     before_flat = latents_before_stein.flatten(1).float()
                     after_flat = latents.flatten(1).float()
-                    steered_cosine_sim = (
-                        (before_flat * after_flat).sum(dim=1)
-                        / (before_flat.norm(dim=1) * after_flat.norm(dim=1) + 1e-8)
-                    ).mean()
+                    before_latent_norm_mean = before_flat.norm(dim=1).mean().item()
+                    after_latent_norm_mean = after_flat.norm(dim=1).mean().item()
                     score_pt_norm_mean = None
-                    target_score_norm_mean = None
-                    good_score_norm_mean = None
-                    if last_score_p_t is not None and last_good_score is not None:
-                        score_pt_norm = last_score_p_t.flatten(1).norm(dim=1)
-                        good_score_norm = last_good_score.float().flatten(1).norm(dim=1)
+                    steered_similarity_mean = None
+                    if last_steer_score is not None:
+                        score_flat = last_steer_score.flatten(1).float()
+                        score_pt_norm = score_flat.norm(dim=1)
                         score_pt_norm_mean = score_pt_norm.mean().item()
-                        good_score_norm_mean = good_score_norm.mean().item()
-                    if last_score_p_t is not None and last_score_q_t is not None:
-                        target_score_flat = last_score_q_t.flatten(1)
-                        target_score_norm = target_score_flat.norm(dim=1)
-                        target_score_norm_mean = target_score_norm.mean().item()
+                        steered_similarity_mean = (
+                            (before_flat * score_flat).sum(dim=1)
+                            / (before_flat.norm(dim=1) * score_pt_norm + 1e-8)
+                        ).mean().item()
 
                     def _fmt3(val: Optional[float]) -> str:
                         return "None" if val is None else f"{val:.3f}"
@@ -744,10 +735,10 @@ def pipeline_using_approx_sd(
                         f"t={t_int} "
                         f"rel_delta={rel_delta.item():.3f} "
                         f"abs_delta={delta.mean().item():.3f} "
-                        f"steered_cosine_sim={steered_cosine_sim.item():.3f} "
+                        f"before_latent_norm={before_latent_norm_mean:.3f} "
                         f"good_score_norm={_fmt3(score_pt_norm_mean)} "
-                        f"target_score_norm={_fmt3(target_score_norm_mean)} "
-                        f"anchor_score_norm={_fmt3(good_score_norm_mean)}"
+                        f"after_latent_norm={after_latent_norm_mean:.3f} "
+                        f"steered_similarity={_fmt3(steered_similarity_mean)}"
                     )
 
                 if verbose:
