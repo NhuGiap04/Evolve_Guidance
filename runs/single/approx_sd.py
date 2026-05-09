@@ -78,6 +78,13 @@ def parse_args():
         help="Number of predicted clean x0 samples per particle.",
     )
     parser.add_argument(
+        "--lookahead-steps",
+        dest="lookahead_steps",
+        type=int,
+        default=None,
+        help="Number of internal clean-prediction lookahead steps.",
+    )
+    parser.add_argument(
         "--monitor-status",
         action="store_true",
         help="Print relative and absolute latent changes caused by each steered Stein step.",
@@ -252,6 +259,8 @@ def main():
         config.sample.prediction_model = args.prediction_model
     if args.predicted_samples is not None:
         config.sample.predicted_samples = args.predicted_samples
+    if args.lookahead_steps is not None:
+        config.sample.lookahead_steps = args.lookahead_steps
     if args.monitor_status:
         config.sample.monitor_status = True
     if args.steer_start is not None:
@@ -348,6 +357,7 @@ def main():
         kl_coeff=config.sample.kl_coeff,
         prediction_model=config.sample.prediction_model,
         predicted_samples=config.sample.predicted_samples,
+        lookahead_steps=config.sample.lookahead_steps,
         steer_start=config.sample.steer_start,
         steer_end=config.sample.steer_end,
         verbose=args.verbose,

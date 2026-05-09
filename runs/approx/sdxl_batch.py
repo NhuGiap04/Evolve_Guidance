@@ -157,6 +157,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
     _append_optional_arg(cmd, "--prediction-model", args.prediction_model)
     _append_optional_arg(cmd, "--predicted-samples", args.predicted_samples)
+    _append_optional_arg(cmd, "--lookahead-steps", args.lookahead_steps)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
     if args.monitor_status:
@@ -255,6 +256,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--prediction-model", type=str, default=None, choices=["default", "dpm", "lcm", "dmd"])
     parser.add_argument("--predicted-samples", type=int, default=None)
+    parser.add_argument("--lookahead-steps", "--dpm-lookahead-steps", dest="lookahead_steps", type=int, default=None)
     parser.add_argument("--monitor-status", action="store_true")
     parser.add_argument("--steer-start", type=int, default=None)
     parser.add_argument("--steer-end", type=int, default=None)
@@ -444,6 +446,8 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             config.sample.prediction_model = args.prediction_model
         if args.predicted_samples is not None:
             config.sample.predicted_samples = args.predicted_samples
+        if args.lookahead_steps is not None:
+            config.sample.lookahead_steps = args.lookahead_steps
         if args.monitor_status:
             config.sample.monitor_status = True
         if args.steer_start is not None:
@@ -480,6 +484,7 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             "monitor_status": False,
             "prediction_model": "default",
             "predicted_samples": 1,
+            "lookahead_steps": 10,
         }
         if args.num_steps is not None:
             sample["num_steps"] = args.num_steps
@@ -507,6 +512,8 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             sample["prediction_model"] = args.prediction_model
         if args.predicted_samples is not None:
             sample["predicted_samples"] = args.predicted_samples
+        if args.lookahead_steps is not None:
+            sample["lookahead_steps"] = args.lookahead_steps
         if args.monitor_status:
             sample["monitor_status"] = True
         if args.steer_start is not None:

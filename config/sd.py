@@ -22,6 +22,7 @@ def _base_config():
     config.sample.kl_coeff = 0.0001
     config.sample.prediction_model = "default"
     config.sample.predicted_samples = 1
+    config.sample.lookahead_steps = 10
     config.sample.steer_start = None
     config.sample.steer_end = None
     config.sample.monitor_status = False

@@ -5,6 +5,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import torch
+from diffusers import DPMSolverMultistepScheduler
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
     StableDiffusionXLPipeline,
     StableDiffusionXLPipelineOutput,
@@ -157,6 +158,24 @@ def _to_timestep_int(t: Union[int, torch.Tensor]) -> int:
     return int(t.item()) if torch.is_tensor(t) else int(t)
 
 
+def _lookahead_timesteps(t: Union[int, torch.Tensor], num_train_timesteps: int, max_steps: int = 10) -> List[int]:
+    t_int = max(0, min(_to_timestep_int(t), num_train_timesteps - 1))
+    if t_int == 0:
+        return [0]
+
+    num_steps = max(2, min(max_steps, t_int + 1))
+    timesteps_tensor = torch.linspace(t_int, 0, steps=num_steps).round().to(torch.int64)
+    timesteps_list: List[int] = []
+    for timestep in timesteps_tensor.tolist():
+        timestep_int = int(timestep)
+        if not timesteps_list or timestep_int < timesteps_list[-1]:
+            timesteps_list.append(timestep_int)
+
+    if timesteps_list[-1] != 0:
+        timesteps_list.append(0)
+    return timesteps_list
+
+
 @torch.no_grad()
 def pipeline_using_approx_sdxl(
     self: StableDiffusionXLPipeline,
@@ -209,11 +228,16 @@ def pipeline_using_approx_sdxl(
     steer_start: Optional[int] = None,
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
+    lookahead_steps: int = 10,
     verbose: bool = False,
     monitor_status: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
     """Run SDXL denoising with optional approximate Stein particle transport guidance."""
+
+    legacy_dpm_lookahead_steps = kwargs.pop("dpm_lookahead_steps", None)
+    if legacy_dpm_lookahead_steps is not None:
+        lookahead_steps = int(legacy_dpm_lookahead_steps)
 
     callback = kwargs.pop("callback", None)
     callback_steps = kwargs.pop("callback_steps", None)
@@ -250,6 +274,8 @@ def pipeline_using_approx_sdxl(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
+    if lookahead_steps < 1:
+        raise ValueError("lookahead_steps must be >= 1")
     self.check_inputs(
         prompt,
         prompt_2,
@@ -504,9 +530,11 @@ def pipeline_using_approx_sdxl(
         t: torch.Tensor,
         start_idx: Optional[int] = None,
         end_idx: Optional[int] = None,
+        scheduler: Optional[Any] = None,
     ) -> torch.Tensor:
+        scheduler = scheduler or self.scheduler
         latent_model_input = torch.cat([current_latents] * 2) if self.do_classifier_free_guidance else current_latents
-        latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+        latent_model_input = scheduler.scale_model_input(latent_model_input, t)
 
         prompt_embeds_local = _slice_condition_tensor(prompt_embeds, start_idx, end_idx)
         add_text_embeds_local = _slice_condition_tensor(add_text_embeds, start_idx, end_idx)
@@ -549,6 +577,48 @@ def pipeline_using_approx_sdxl(
         pred_x0 = (current_latents - sqrt_one_minus_alpha_bar_t * noise_pred_local) / sqrt_alpha_bar_t
         return pred_x0, sqrt_alpha_bar_t, sqrt_one_minus_alpha_bar_t
 
+    def _dpm_x0_lookahead(
+        current_latents: torch.Tensor,
+        t: torch.Tensor,
+        start_idx: Optional[int] = None,
+        end_idx: Optional[int] = None,
+    ) -> torch.Tensor:
+        dpm_timesteps = _lookahead_timesteps(
+            t,
+            num_train_timesteps=int(self.scheduler.config.num_train_timesteps),
+            max_steps=lookahead_steps,
+        )
+        if len(dpm_timesteps) == 1:
+            noise_pred_local = _predict_noise(current_latents, t, start_idx=start_idx, end_idx=end_idx)
+            pred_x0, _, _ = _predict_x0(current_latents, _to_timestep_int(t), noise_pred_local)
+            return pred_x0
+
+        dpm_scheduler = DPMSolverMultistepScheduler.from_config(
+            self.scheduler.config,
+            algorithm_type="dpmsolver++",
+            solver_order=2,
+            thresholding=False,
+        )
+        dpm_scheduler.set_timesteps(timesteps=dpm_timesteps, device=current_latents.device)
+
+        dpm_latents = current_latents
+        for dpm_t in dpm_scheduler.timesteps:
+            noise_pred_local = _predict_noise(
+                dpm_latents,
+                dpm_t,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                scheduler=dpm_scheduler,
+            )
+            dpm_latents = dpm_scheduler.step(
+                noise_pred_local,
+                dpm_t,
+                dpm_latents,
+                return_dict=False,
+            )[0]
+
+        return dpm_latents.to(dtype=current_latents.dtype)
+
     def x0_lookahead(
         current_latents: torch.Tensor,
         t: torch.Tensor,
@@ -564,14 +634,17 @@ def pipeline_using_approx_sdxl(
         if prediction_model_normalized not in {"default", "dpm", "lcm", "dmd"}:
             raise ValueError("prediction_model must be one of: default, dpm, lcm, dmd")
 
-        if prediction_model_normalized != "default":
+        if prediction_model_normalized in {"lcm", "dmd"}:
             raise NotImplementedError(
                 f"prediction_model='{prediction_model}' is reserved but not implemented yet. "
-                "Use prediction_model='default'."
+                "Use prediction_model='default' or 'dpm'."
             )
 
         if predicted_samples != 1:
-            raise ValueError("prediction_model='default' currently supports only predicted_samples=1")
+            raise ValueError("This pipeline currently supports only predicted_samples=1")
+
+        if prediction_model_normalized == "dpm":
+            return _dpm_x0_lookahead(current_latents, t, start_idx=start_idx, end_idx=end_idx)
 
         noise_pred_local = _predict_noise(current_latents, t, start_idx=start_idx, end_idx=end_idx)
         pred_x0, _, _ = _predict_x0(current_latents, _to_timestep_int(t), noise_pred_local)

@@ -204,8 +204,9 @@ SD default checkpoint:
 - `--stein-kernel`: Stein kernel (`rbf`)
 - `--stein-adagrad-eps`: AdaGrad epsilon for Stein step adaptation
 - `--kl-coeff`: reward scaling denominator
-- `--prediction-model`: approx-only clean prediction backend (`default`, `dpm`, `lcm`, `dmd`; only `default` is implemented currently)
+- `--prediction-model`: approx-only clean prediction backend (`default`, `dpm`, `lcm`, `dmd`; `lcm` and `dmd` are reserved)
 - `--predicted-samples`: approx-only number of predicted clean samples per particle
+- `--lookahead-steps`: internal clean-prediction solver steps for lookahead-capable prediction models
 - `--monitor-status`: print per-step latent delta diagnostics
 - `--steer-start`, `--steer-end`: steering window (0-based step index)
 
