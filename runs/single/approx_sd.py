@@ -68,7 +68,7 @@ def parse_args():
         "--soft-temperature",
         type=float,
         default=None,
-        help="Optional softmax temperature for soft good weights. Defaults to latent dimensionality.",
+        help="Optional upper bound for adaptive soft-good softmax temperature. Defaults to latent dimensionality.",
     )
     parser.add_argument(
         "--prediction-model",

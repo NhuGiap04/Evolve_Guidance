@@ -277,8 +277,8 @@ def pipeline_using_approx_sdxl(
         raise ValueError("stein_step must be >= 0")
     if lookahead_steps < 1:
         raise ValueError("lookahead_steps must be >= 1")
-    if soft_temperature is not None and soft_temperature <= 0:
-        raise ValueError("soft_temperature must be > 0")
+    if soft_temperature is not None and soft_temperature < 1:
+        raise ValueError("soft_temperature must be >= 1")
     self.check_inputs(
         prompt,
         prompt_2,
@@ -730,7 +730,7 @@ def pipeline_using_approx_sdxl(
         one_minus_alpha_bar_t = torch.clamp(1.0 - alpha_bar_t, min=1e-6)
 
         b, c, h, w = current_latents.shape
-        soft_temperature_value = float(soft_temperature) if soft_temperature is not None else float(c * h * w)
+        soft_temperature_max = float(soft_temperature) if soft_temperature is not None else float(c * h * w)
         latents_grouped = current_latents.float().view(base_sample_count, num_particles, c, h, w)
         predicted_grouped = predicted_x0.float().view(base_sample_count, num_particles, c, h, w)
         rewards_grouped = rewards.float().view(base_sample_count, num_particles)
@@ -744,7 +744,12 @@ def pipeline_using_approx_sdxl(
             means = sqrt_alpha_bar_t * z
             diff = x[:, None, :] - means[None, :, :]
             log_forward = -0.5 * diff.pow(2).sum(dim=-1) / one_minus_alpha_bar_t
-            log_weights = (log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)) / torch.sqrt(soft_temperature_value)
+            raw_log_weights = log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)
+            adaptive_temperature = raw_log_weights.std(dim=1, keepdim=True, unbiased=False).clamp(
+                min=1.0,
+                max=soft_temperature_max,
+            )
+            log_weights = raw_log_weights / adaptive_temperature
             weights = torch.softmax(log_weights, dim=1)
             if monitor_status:
                 reward_term = h_reward[None, :] / max(kl_coeff, 1e-6)
@@ -753,6 +758,7 @@ def pipeline_using_approx_sdxl(
                     f"group={group_idx} "
                     f"log_forward={log_forward.detach().cpu().tolist()} "
                     f"reward_term={reward_term.detach().cpu().tolist()} "
+                    f"soft_temperature={adaptive_temperature.detach().cpu().tolist()} "
                     f"soft_good_weights={weights.detach().cpu().tolist()}"
                 )
             component_scores = -diff / one_minus_alpha_bar_t
