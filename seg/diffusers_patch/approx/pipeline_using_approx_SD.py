@@ -263,8 +263,8 @@ def pipeline_using_approx_sd(
         raise ValueError("stein_step must be >= 0")
     if lookahead_steps < 1:
         raise ValueError("lookahead_steps must be >= 1")
-    if soft_temperature is not None and soft_temperature < 1:
-        raise ValueError("soft_temperature must be >= 1")
+    if soft_temperature is not None and soft_temperature <= 0:
+        raise ValueError("soft_temperature must be > 0")
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
         "prompt": prompt,
@@ -691,7 +691,7 @@ def pipeline_using_approx_sd(
         one_minus_alpha_bar_t = torch.clamp(1.0 - alpha_bar_t, min=1e-6)
 
         b, c, h, w = current_latents.shape
-        soft_temperature_max = float(soft_temperature) if soft_temperature is not None else float(c * h * w)
+        fixed_soft_temperature = float(soft_temperature) if soft_temperature is not None else None
         latents_grouped = current_latents.float().view(base_sample_count, num_particles, c, h, w)
         predicted_grouped = predicted_x0.float().view(base_sample_count, num_particles, c, h, w)
         rewards_grouped = rewards.float().view(base_sample_count, num_particles)
@@ -706,10 +706,15 @@ def pipeline_using_approx_sd(
             diff = x[:, None, :] - means[None, :, :]
             log_forward = -0.5 * diff.pow(2).sum(dim=-1) / one_minus_alpha_bar_t
             raw_log_weights = log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)
-            adaptive_temperature = raw_log_weights.std(dim=1, keepdim=True, unbiased=False).clamp(
-                min=1.0,
-                max=soft_temperature_max,
-            )
+            if fixed_soft_temperature is None:
+                adaptive_temperature = raw_log_weights.std(dim=1, keepdim=True, unbiased=False).clamp(min=1.0)
+            else:
+                adaptive_temperature = torch.full(
+                    (raw_log_weights.shape[0], 1),
+                    fixed_soft_temperature,
+                    device=raw_log_weights.device,
+                    dtype=raw_log_weights.dtype,
+                )
             log_weights = raw_log_weights / adaptive_temperature
             weights = torch.softmax(log_weights, dim=1)
             if monitor_status:

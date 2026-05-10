@@ -68,7 +68,7 @@ def parse_args():
         "--soft-temperature",
         type=float,
         default=None,
-        help="Optional upper bound for adaptive soft-good softmax temperature. Defaults to latent dimensionality.",
+        help="Optional fixed soft-good softmax temperature. Defaults to adaptive max(std, 1).",
     )
     parser.add_argument(
         "--prediction-model",
@@ -375,16 +375,15 @@ def main():
         return_all_particles=True,
         return_dict=False,
     )
-    if args.verbose:
-        call_kwargs["callback_on_step_end"] = collect_step_latents
-        call_kwargs["callback_on_step_end_tensor_inputs"] = []
-
     inference_start = time.time()
     with torch.no_grad():
         result = pipeline_using_approx_sdxl(pipe, **call_kwargs)
     inference_elapsed = time.time() - inference_start
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
+    intermediate_rewards = None
+    if args.verbose and isinstance(result, (tuple, list)) and len(result) > 1:
+        intermediate_rewards = result[1]
     with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
 
@@ -433,45 +432,70 @@ def main():
         pre_steer_max = []
         post_steer_max = []
 
-        for trace in trace_entries:
-            trace_prompts = prompt_particles[: trace["pre_x0_latents_cpu"].shape[0]]
-            if len(trace_prompts) != trace["pre_x0_latents_cpu"].shape[0]:
-                trace_prompts = [args.prompt] * trace["pre_x0_latents_cpu"].shape[0]
+        if intermediate_rewards is not None:
+            reward_keys = [
+                "step_indices",
+                "timesteps",
+                "pre_steer_mean",
+                "post_steer_mean",
+                "pre_steer_max",
+                "post_steer_max",
+            ]
+            trace_len = min(len(intermediate_rewards.get(key, [])) for key in reward_keys)
+            for idx in range(trace_len):
+                row = {
+                    "step_index": int(intermediate_rewards["step_indices"][idx]),
+                    "timestep": int(intermediate_rewards["timesteps"][idx]),
+                    "pre_steer_mean": float(intermediate_rewards["pre_steer_mean"][idx]),
+                    "post_steer_mean": float(intermediate_rewards["post_steer_mean"][idx]),
+                    "pre_steer_max": float(intermediate_rewards["pre_steer_max"][idx]),
+                    "post_steer_max": float(intermediate_rewards["post_steer_max"][idx]),
+                }
+                trace_rows.append(row)
+                pre_steer_mean.append(row["pre_steer_mean"])
+                post_steer_mean.append(row["post_steer_mean"])
+                pre_steer_max.append(row["pre_steer_max"])
+                post_steer_max.append(row["post_steer_max"])
+        else:
+            for trace in trace_entries:
+                trace_prompts = prompt_particles[: trace["pre_x0_latents_cpu"].shape[0]]
+                if len(trace_prompts) != trace["pre_x0_latents_cpu"].shape[0]:
+                    trace_prompts = [args.prompt] * trace["pre_x0_latents_cpu"].shape[0]
 
-            pre_steer_scores = _score_latents_in_batches(
-                pipe=pipe,
-                latents_cpu=trace["pre_x0_latents_cpu"],
-                prompts=trace_prompts,
-                steer_scorer=steer_scorer,
-                batch_size=args.trace_eval_batch,
-                device=device,
-                inference_dtype=inference_dtype,
-            )
-            post_steer_scores = _score_latents_in_batches(
-                pipe=pipe,
-                latents_cpu=trace["post_x0_latents_cpu"],
-                prompts=trace_prompts,
-                steer_scorer=steer_scorer,
-                batch_size=args.trace_eval_batch,
-                device=device,
-                inference_dtype=inference_dtype,
-            )
+                pre_steer_scores = _score_latents_in_batches(
+                    pipe=pipe,
+                    latents_cpu=trace["pre_x0_latents_cpu"],
+                    prompts=trace_prompts,
+                    steer_scorer=steer_scorer,
+                    batch_size=args.trace_eval_batch,
+                    device=device,
+                    inference_dtype=inference_dtype,
+                )
+                post_steer_scores = _score_latents_in_batches(
+                    pipe=pipe,
+                    latents_cpu=trace["post_x0_latents_cpu"],
+                    prompts=trace_prompts,
+                    steer_scorer=steer_scorer,
+                    batch_size=args.trace_eval_batch,
+                    device=device,
+                    inference_dtype=inference_dtype,
+                )
 
-            row = {
-                "step_index": int(trace["step_index"]),
-                "timestep": int(trace["timestep"]),
-                "pre_steer_mean": float(pre_steer_scores.mean().item()),
-                "post_steer_mean": float(post_steer_scores.mean().item()),
-                "pre_steer_max": float(pre_steer_scores.max().item()),
-                "post_steer_max": float(post_steer_scores.max().item()),
-            }
-            trace_rows.append(row)
+                row = {
+                    "step_index": int(trace["step_index"]),
+                    "timestep": int(trace["timestep"]),
+                    "pre_steer_mean": float(pre_steer_scores.mean().item()),
+                    "post_steer_mean": float(post_steer_scores.mean().item()),
+                    "pre_steer_max": float(pre_steer_scores.max().item()),
+                    "post_steer_max": float(post_steer_scores.max().item()),
+                }
+                trace_rows.append(row)
+                pre_steer_mean.append(row["pre_steer_mean"])
+                post_steer_mean.append(row["post_steer_mean"])
+                pre_steer_max.append(row["pre_steer_max"])
+                post_steer_max.append(row["post_steer_max"])
 
-            pre_steer_mean.append(row["pre_steer_mean"])
-            post_steer_mean.append(row["post_steer_mean"])
-            pre_steer_max.append(row["pre_steer_max"])
-            post_steer_max.append(row["post_steer_max"])
-
+        for row in trace_rows:
             print(
                 f"[steer step {row['step_index']:03d} | t={row['timestep']:04d}] "
                 f"mean: {row['pre_steer_mean']:.6f} -> {row['post_steer_mean']:.6f} "

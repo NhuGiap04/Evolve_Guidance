@@ -154,6 +154,45 @@ $$
 \omega_i=\mathrm{softmax}_i(\log a_i).
 $$
 
+In high-dimensional latent space, the Gaussian log forward term is a sum over all latent dimensions. Even modest per-dimension differences can accumulate into logit gaps of hundreds or thousands, causing the softmax to become effectively one-hot. To avoid one anchor dominating purely because of logit scale, the implementation applies a bounded adaptive temperature before the softmax.
+
+For a current particle $x_t^{(j)}$, define the raw log weights over anchors:
+
+$$
+\ell_{j,i}
+=
+\log p(x_t^{(j)}\mid x_0=z^{(i)})
++\frac{h(z^{(i)})}{\alpha}.
+$$
+
+Then compute a row-wise temperature from the empirical spread of the raw logits:
+
+$$
+\tau_j
+=
+\max\left(\mathrm{Std}_{i}(\ell_{j,i}),\tau_{\min}\right),
+\qquad
+\tau_{\min}=1.
+$$
+
+The normalized mixture weights are then
+
+$$
+\omega_{j,i}
+=
+\mathrm{softmax}_i\left(\frac{\ell_{j,i}}{\tau_j}\right).
+$$
+
+In code this adaptive behavior corresponds to `soft_temperature=None`. If `soft_temperature` is set, it disables the adaptive rule and uses the provided fixed temperature:
+
+$$
+\tau_j
+=
+\texttt{soft\_temperature}.
+$$
+
+This temperature is a numerical stabilization heuristic for the Monte Carlo mixture; it is not part of the exact probabilistic density.
+
 ## 5. Getting $x_0$ Anchors While Steering at $x_t$
 
 At a steered latent $x_t$, the clean anchors $z^{(i)}$ are approximations of possible $x_0$ outcomes conditioned on the current state and prompt. To obtain them cheaply, use a distilled or fast-sampling model rather than a full denoising rollout.
