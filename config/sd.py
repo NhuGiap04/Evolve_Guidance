@@ -20,6 +20,7 @@ def _base_config():
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
     config.sample.kl_coeff = 0.0001
+    config.sample.soft_temperature = None
     config.sample.prediction_model = "default"
     config.sample.predicted_samples = 1
     config.sample.lookahead_steps = 10

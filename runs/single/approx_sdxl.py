@@ -65,6 +65,12 @@ def parse_args():
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(
+        "--soft-temperature",
+        type=float,
+        default=None,
+        help="Optional softmax temperature for soft good weights. Defaults to latent dimensionality.",
+    )
+    parser.add_argument(
         "--prediction-model",
         type=str,
         default=None,
@@ -255,6 +261,8 @@ def main():
         config.sample.stein_adagrad_eps = args.stein_adagrad_eps
     if args.kl_coeff is not None:
         config.sample.kl_coeff = args.kl_coeff
+    if args.soft_temperature is not None:
+        config.sample.soft_temperature = args.soft_temperature
     if args.prediction_model is not None:
         config.sample.prediction_model = args.prediction_model
     if args.predicted_samples is not None:
@@ -356,6 +364,7 @@ def main():
         stein_adagrad_eps=config.sample.stein_adagrad_eps,
         stein_adagrad_clip=config.sample.stein_adagrad_clip,
         kl_coeff=config.sample.kl_coeff,
+        soft_temperature=config.sample.soft_temperature,
         prediction_model=config.sample.prediction_model,
         predicted_samples=config.sample.predicted_samples,
         lookahead_steps=config.sample.lookahead_steps,

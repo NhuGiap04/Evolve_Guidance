@@ -155,6 +155,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path)
     _append_optional_arg(cmd, "--stein-kernel", args.stein_kernel)
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
+    _append_optional_arg(cmd, "--soft-temperature", args.soft_temperature)
     _append_optional_arg(cmd, "--prediction-model", args.prediction_model)
     _append_optional_arg(cmd, "--predicted-samples", args.predicted_samples)
     _append_optional_arg(cmd, "--lookahead-steps", args.lookahead_steps)
@@ -254,6 +255,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
+    parser.add_argument("--soft-temperature", type=float, default=None)
     parser.add_argument("--prediction-model", type=str, default=None, choices=["default", "dpm", "lcm", "dmd"])
     parser.add_argument("--predicted-samples", type=int, default=None)
     parser.add_argument("--lookahead-steps", "--dpm-lookahead-steps", dest="lookahead_steps", type=int, default=None)
@@ -442,6 +444,8 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             config.sample.stein_adagrad_eps = args.stein_adagrad_eps
         if args.kl_coeff is not None:
             config.sample.kl_coeff = args.kl_coeff
+        if args.soft_temperature is not None:
+            config.sample.soft_temperature = args.soft_temperature
         if args.prediction_model is not None:
             config.sample.prediction_model = args.prediction_model
         if args.predicted_samples is not None:
@@ -479,6 +483,7 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             "stein_adagrad_eps": 1e-8,
             "stein_adagrad_clip": None,
             "kl_coeff": 0.0001,
+            "soft_temperature": None,
             "steer_start": None,
             "steer_end": None,
             "monitor_status": False,
@@ -508,6 +513,8 @@ def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
             sample["stein_adagrad_eps"] = args.stein_adagrad_eps
         if args.kl_coeff is not None:
             sample["kl_coeff"] = args.kl_coeff
+        if args.soft_temperature is not None:
+            sample["soft_temperature"] = args.soft_temperature
         if args.prediction_model is not None:
             sample["prediction_model"] = args.prediction_model
         if args.predicted_samples is not None:

@@ -223,6 +223,7 @@ def pipeline_using_approx_sdxl(
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
+    soft_temperature: Optional[float] = None,
     prediction_model: str = "default",
     predicted_samples: int = 1,
     steer_start: Optional[int] = None,
@@ -276,6 +277,8 @@ def pipeline_using_approx_sdxl(
         raise ValueError("stein_step must be >= 0")
     if lookahead_steps < 1:
         raise ValueError("lookahead_steps must be >= 1")
+    if soft_temperature is not None and soft_temperature <= 0:
+        raise ValueError("soft_temperature must be > 0")
     self.check_inputs(
         prompt,
         prompt_2,
@@ -727,6 +730,7 @@ def pipeline_using_approx_sdxl(
         one_minus_alpha_bar_t = torch.clamp(1.0 - alpha_bar_t, min=1e-6)
 
         b, c, h, w = current_latents.shape
+        soft_temperature_value = float(soft_temperature) if soft_temperature is not None else float(c * h * w)
         latents_grouped = current_latents.float().view(base_sample_count, num_particles, c, h, w)
         predicted_grouped = predicted_x0.float().view(base_sample_count, num_particles, c, h, w)
         rewards_grouped = rewards.float().view(base_sample_count, num_particles)
@@ -740,7 +744,7 @@ def pipeline_using_approx_sdxl(
             means = sqrt_alpha_bar_t * z
             diff = x[:, None, :] - means[None, :, :]
             log_forward = -0.5 * diff.pow(2).sum(dim=-1) / one_minus_alpha_bar_t
-            log_weights = log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)
+            log_weights = (log_forward + h_reward[None, :] / max(kl_coeff, 1e-6)) / torch.sqrt(soft_temperature_value)
             weights = torch.softmax(log_weights, dim=1)
             if monitor_status:
                 reward_term = h_reward[None, :] / max(kl_coeff, 1e-6)
