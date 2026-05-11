@@ -18,7 +18,7 @@ pip install --no-deps image-reward
 Single prompt:
 
 ```bash
-python runs/single/gradient_sdxl.py \
+python runs/gradient/gradient_sdxl.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \
@@ -54,7 +54,7 @@ python runs/gradient/sdxl_batch.py \
 Single prompt:
 
 ```bash
-python runs/single/approx_sdxl.py \
+python runs/approx/approx_sdxl.py \
   --config image_reward \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \
@@ -96,7 +96,7 @@ python runs/approx/sdxl_batch.py \
 Single prompt:
 
 ```bash
-python runs/single/gradient_sd.py \
+python runs/gradient/gradient_sd.py \
   --config pick \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \
@@ -132,7 +132,7 @@ python runs/gradient/sd_batch.py \
 Single prompt:
 
 ```bash
-python runs/single/approx_sd.py \
+python runs/approx/approx_sd.py \
   --config image_reward \
   --prompt "A cinematic portrait of a fox astronaut" \
   --num-steps 100 \

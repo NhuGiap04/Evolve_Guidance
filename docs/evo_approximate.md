@@ -36,32 +36,28 @@ There is no Good/Bad set construction. In particular, we do not compute a reward
 For the good event $y=1$, the target intermediate density at timestep $t$ is
 
 $$
-p(x_t=x\mid y=1,c)
-=
+p(x_t=x\mid y=1,c) =
 \int p(x_t=x,x_0=z\mid y=1,c)\,dz.
 $$
 
 Using the forward diffusion marginal conditioned on $x_0$:
 
 $$
-p(x_t=x\mid y=1,c)
-=
+p(x_t=x\mid y=1,c) =
 \int p(x_t=x\mid x_0=z)\,p(x_0=z\mid y=1,c)\,dz.
 $$
 
 The clean good-conditioned distribution is reward tilted:
 
 $$
-p(x_0=z\mid y=1,c)
-=
+p(x_0=z\mid y=1,c) =
 \frac{1}{Z}p_{\text{data}}(z\mid c)\exp\left(\frac{h(z)}{\alpha}\right).
 $$
 
 Therefore,
 
 $$
-p(x_t=x\mid y=1,c)
-=
+p(x_t=x\mid y=1,c) =
 \frac{1}{Z}
 \mathbb E_{z\sim p_{\text{data}}(\cdot\mid c)}
 \left[
@@ -73,8 +69,7 @@ $$
 Taking the score removes the unknown constant $Z$:
 
 $$
-\nabla_{x_t}\log p(x_t=x\mid y=1,c)
-=
+\nabla_{x_t}\log p(x_t=x\mid y=1,c) =
 \nabla_{x_t}\log
 \mathbb E_{z\sim p_{\text{data}}(\cdot\mid c)}
 \left[
@@ -101,8 +96,7 @@ $$
 Under the standard diffusion forward marginal,
 
 $$
-p(x_t=x\mid x_0=z^{(i)})
-=
+p(x_t=x\mid x_0=z^{(i)}) =
 \mathcal N\left(
 x;\sqrt{\bar\alpha_t}\,z^{(i)},(1-\bar\alpha_t)I
 \right),
@@ -111,8 +105,7 @@ $$
 and
 
 $$
-\nabla_x\log p(x_t=x\mid x_0=z^{(i)})
-=
+\nabla_x\log p(x_t=x\mid x_0=z^{(i)}) =
 -\frac{x-\sqrt{\bar\alpha_t}\,z^{(i)}}{1-\bar\alpha_t}.
 $$
 
@@ -131,8 +124,7 @@ $$
 where
 
 $$
-\omega_i(x,t)
-=
+\omega_i(x,t) =
 \frac{
 p(x_t=x\mid x_0=z^{(i)})
 \exp\left(h(z^{(i)})/\alpha\right)
@@ -146,8 +138,7 @@ $$
 For numerical stability, compute the mixture weights in log space:
 
 $$
-\log a_i
-=
+\log a_i =
 \log p(x_t=x\mid x_0=z^{(i)})
 +\frac{h(z^{(i)})}{\alpha},
 \qquad
@@ -159,8 +150,7 @@ In high-dimensional latent space, the Gaussian log forward term is a sum over al
 For a current particle $x_t^{(j)}$, define the raw log weights over anchors:
 
 $$
-\ell_{j,i}
-=
+\ell_{j,i} =
 \log p(x_t^{(j)}\mid x_0=z^{(i)})
 +\frac{h(z^{(i)})}{\alpha}.
 $$
@@ -168,8 +158,7 @@ $$
 Then compute a row-wise temperature from the empirical spread of the raw logits:
 
 $$
-\tau_j
-=
+\tau_j =
 \max\left(\mathrm{Std}_{i}(\ell_{j,i}),\tau_{\min}\right),
 \qquad
 \tau_{\min}=1.
@@ -178,16 +167,14 @@ $$
 The normalized mixture weights are then
 
 $$
-\omega_{j,i}
-=
+\omega_{j,i} =
 \mathrm{softmax}_i\left(\frac{\ell_{j,i}}{\tau_j}\right).
 $$
 
 In code this adaptive behavior corresponds to `soft_temperature=None`. If `soft_temperature` is set, it disables the adaptive rule and uses the provided fixed temperature:
 
 $$
-\tau_j
-=
+\tau_j =
 \texttt{soft\_temperature}.
 $$
 
@@ -220,8 +207,7 @@ Then evaluate $h(z^{(j,\ell)})$ after decoding the anchor to image space if the 
 Use the soft good-conditioned score from Section 4 as the target score inside an SVGD field. For particles $\{x_t^{(j)}\}_{j=1}^{K}$ in the same prompt group:
 
 $$
-\hat\phi_t(x)
-=
+\hat\phi_t(x) =
 \frac{1}{K}\sum_{j=1}^{K}
 \left[
 k(x_t^{(j)},x)\,
@@ -281,8 +267,7 @@ where `DecodeToClean` is the scheduler's $x_0$ prediction.
 Then compute the next latent with the clean corrected term:
 
 $$
-x_{t-1}
-=
+x_{t-1} =
 \sqrt{\bar\alpha_{t-1}}\,\bar x_{0|t}
 +
 \sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\,

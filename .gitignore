@@ -213,3 +213,4 @@ __marimo__/
 *.ipynb
 
 logs/
+clean_pycache.sh

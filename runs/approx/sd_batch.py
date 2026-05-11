@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for runs/single/approx_sd.py using prompts from .txt or .json."""
+"""Batch runner for runs/approx/approx_sd.py using prompts from .txt or .json."""
 
 import argparse
 import csv
@@ -214,7 +214,7 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run runs/single/approx_sd.py over prompts from a .txt or .json file.",
+        description="Run runs/approx/approx_sd.py over prompts from a .txt or .json file.",
     )
     parser.add_argument("--prompts-file", type=Path, required=True, help="Path to .txt or .json prompts file.")
     parser.add_argument(
@@ -223,14 +223,14 @@ def parse_args() -> argparse.Namespace:
         "--sd-script",
         dest="sd_script",
         type=Path,
-        default=Path("runs/single/approx_sd.py"),
+        default=Path("runs/approx/approx_sd.py"),
         help="Path to the single-prompt approx SD script.",
     )
     parser.add_argument(
         "--python",
         type=str,
         default=sys.executable,
-        help="Python executable used to launch runs/single/approx_sd.py.",
+        help="Python executable used to launch runs/approx/approx_sd.py.",
     )
     parser.add_argument(
         "--config",

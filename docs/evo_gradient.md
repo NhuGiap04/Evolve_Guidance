@@ -1,4 +1,4 @@
-# EVO v1 Plan: DAS -> Stein-Transport Sampling (No SMC)
+# EVO v1 Plan: Stein-Transport Sampling
 
 This document specifies the implementation plan for replacing the current SMC-style sampling logic with a Stein-transport update while keeping the SDXL denoising structure from DAS.
 
@@ -82,18 +82,20 @@ Expose in config (via `config/general.py` and preset overrides):
 - `sample.steer_start`
 - `sample.steer_end`
 
-Pass through in runner callsites (`runs/single/gradient_sdxl.py`, `runs/single/gradient_sd.py`) when invoking pipeline.
+Pass through in runner callsites (`runs/gradient/gradient_sdxl.py`, `runs/gradient/gradient_sd.py`) when invoking pipeline.
 
 ## 4. Mathematical Formulation to Implement
 
 Given particles $\{x_t^{(j)}\}_{j=1}^K$, define Stein vector field:
 
 $$
-\hat\phi_t(x)
-= \frac{1}{K}\sum_{j=1}^{K}
+\hat\phi_t(x) =
+\frac{1}{K}\sum_{j=1}^{K}
 \left[
-k(x_t^{(j)},x)\,\nabla_{x_t^{(j)}}\log q_t(x_t^{(j)}\mid c)
-+ \nabla_{x_t^{(j)}}k(x_t^{(j)},x)
+k(x_t^{(j)},x)\,
+\nabla_{x_t^{(j)}}\log p(x_t^{(j)}\mid y=1,c)
++
+\nabla_{x_t^{(j)}}k(x_t^{(j)},x)
 \right].
 $$
 
@@ -110,7 +112,8 @@ Practical score decomposition:
 $$
 \nabla_x \log q_t(x\mid c)
 = \nabla_x \log p_t(x\mid c)
-+ \beta_t\,\nabla_x r_{\text{int}}(x).
++ 
+\beta_t\,\nabla_x r_{\text{int}}(x).
 $$
 
 - Estimate $\nabla_x \log p_t$ from diffusion model outputs at timestep `t`.
@@ -228,7 +231,7 @@ for t in timesteps:
 	- Implement manifold-preserving proposal update.
 	- Return optional traces (rewards, step norms, particle latents) for debugging.
 
-2. `runs/single/gradient_sdxl.py` and `runs/single/gradient_sd.py`
+2. `runs/gradient/gradient_sdxl.py` and `runs/gradient/gradient_sd.py`
 	- Pass sampling arguments from config to pipeline call.
 	- Keep existing reward scorer wiring.
 

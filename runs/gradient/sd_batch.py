@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for runs/single/gradient_sd.py using prompts from .txt or .json."""
+"""Batch runner for runs/gradient/gradient_sd.py using prompts from .txt or .json."""
 
 import argparse
 import csv
@@ -218,7 +218,7 @@ def parse_args() -> argparse.Namespace:
         "--sd-script",
         dest="sd_script",
         type=Path,
-        default=Path("runs/single/gradient_sd.py"),
+        default=Path("runs/gradient/gradient_sd.py"),
         help="Path to the single-prompt gradient SD script.",
     )
     parser.add_argument(

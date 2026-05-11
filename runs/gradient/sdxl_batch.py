@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch runner for runs/single/gradient_sdxl.py using prompts from .txt or .json."""
+"""Batch runner for runs/gradient/gradient_sdxl.py using prompts from .txt or .json."""
 
 import argparse
 import csv
@@ -218,7 +218,7 @@ def parse_args() -> argparse.Namespace:
         "--sdxl-script",
         dest="sdxl_script",
         type=Path,
-        default=Path("runs/single/gradient_sdxl.py"),
+        default=Path("runs/gradient/gradient_sdxl.py"),
         help="Path to the single-prompt gradient SDXL script.",
     )
     parser.add_argument(
