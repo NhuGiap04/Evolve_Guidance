@@ -28,6 +28,9 @@ setup(
         "lpips",
     ],
     extras_require={
+        "tce": [
+            "image-diversity @ git+https://github.com/fibarrola/image_diversity.git",
+        ],
         "geneval": [
             "mmdet==2.28.2",
             "mmcv-full==1.7.1",

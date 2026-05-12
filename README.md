@@ -9,6 +9,12 @@ pip install -e .
 pip install --no-deps image-reward
 ```
 
+For TCE with Francisco Ibarrola's `image_diversity` implementation:
+
+```bash
+pip install -e ".[tce]"
+```
+
 ## Quick Start
 
 Run one SDXL prompt:
@@ -154,3 +160,31 @@ python eval_geneval_outputs.py \
 Notes:
 - GenEval requires CUDA and Mask2Former weights downloaded via `download_models.sh`.
 - The script matches prompts from `final_rewards.json` against the GenEval prompt set.
+
+## TCE metrics
+
+This repo can calculate Truncated CLIP Entropy (TCE) on generated `sample_*.png`
+sets with `fibarrola/image_diversity`:
+
+```bash
+python calculate_tce.py \
+  --eval-root logs/sd_batch/batch_20260424_111205_6101 \
+  --n-eigs 20 \
+  --batch-size 16
+```
+
+Outputs:
+- Per-run `tce_image_diversity.csv` inside each run directory.
+- Batch-level `tce_image_diversity_batch.csv`.
+- Batch-level `tce_image_diversity_summary.csv`.
+
+The script clamps `--n-eigs` to `num_images - 1` for each run because
+`image_diversity` requires the truncation count to be smaller than the number
+of images. You can also use the same backend from the full evaluator:
+
+```bash
+python eval_generated_outputs.py \
+  --eval-root logs/sd_batch/batch_20260424_111205_6101 \
+  --run-diversity \
+  --diversity-backend image_diversity
+```

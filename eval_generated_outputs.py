@@ -38,6 +38,10 @@ try:
     import lpips
 except ImportError:
     lpips = None
+try:
+    from image_diversity import ClipMetrics as ImageDiversityClipMetrics
+except ImportError:
+    ImageDiversityClipMetrics = None
 
 def build_reward_scorer(name, dtype, device):
     normalized = name.lower()
@@ -144,17 +148,27 @@ def score_reward(scorer, reward_name, images, prompts):
             return scorer(images, prompts)
     return scorer(images, prompts)
 
-def load_diversity_models(device, run_diversity):
+def load_diversity_models(device, run_diversity, diversity_backend, tce_k):
     if not run_diversity:
-        return None, None, None
+        return None, None, None, None
     if pdist is None:
         raise ImportError("CLIP diversity requires scipy. Install scipy or set RUN_DIVERSITY=False.")
     if lpips is None:
         raise ImportError("LPIPS diversity requires lpips. Install lpips or set RUN_DIVERSITY=False.")
+    image_diversity_clip = None
+    if diversity_backend == "image_diversity":
+        if ImageDiversityClipMetrics is None:
+            raise ImportError(
+                "image-diversity is required for --diversity-backend image_diversity. "
+                "Install it with: pip install image-diversity"
+            )
+        # image-diversity 0.1.6 does not initialize self.device when device is
+        # passed explicitly, so let the package choose cuda:0/cpu automatically.
+        image_diversity_clip = ImageDiversityClipMetrics(n_eigs=tce_k)
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to(device).eval()
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
     lpips_model = lpips.LPIPS(net="alex").to(device).eval()
-    return clip_model, clip_processor, lpips_model
+    return clip_model, clip_processor, lpips_model, image_diversity_clip
 
 def load_lpips_tensor(path):
     transform = transforms.Compose([
@@ -163,10 +177,37 @@ def load_lpips_tensor(path):
     ])
     return transform(Image.open(path).convert("RGB")).unsqueeze(0)
 
-def calculate_diversity_metrics(image_paths, clip_model, clip_processor, lpips_model, device, k=20):
+def calculate_image_diversity_tce(image_paths, image_diversity_clip, k=20, batch_size=16):
+    if len(image_paths) < 2:
+        return np.nan, 0
+    effective_k = min(k, len(image_paths) - 1)
+    if effective_k < 1:
+        return np.nan, 0
+    image_diversity_clip.n_eigs = effective_k
+    return float(
+        image_diversity_clip.tce(
+            str(image_paths[0].parent),
+            img_names=[path.name for path in image_paths],
+            batch_size=batch_size,
+        )
+    ), effective_k
+
+def calculate_diversity_metrics(
+    image_paths,
+    clip_model,
+    clip_processor,
+    lpips_model,
+    device,
+    k=20,
+    tce_backend="approximate",
+    image_diversity_clip=None,
+    diversity_batch_size=16,
+):
     if len(image_paths) < 2:
         return {
             "num_images": len(image_paths),
+            "tce_backend": tce_backend,
+            "tce_n_eigs": 0,
             "clip_pairwise_mean": np.nan,
             "clip_pairwise_std": np.nan,
             "clip_pairwise_min": np.nan,
@@ -192,9 +233,20 @@ def calculate_diversity_metrics(image_paths, clip_model, clip_processor, lpips_m
     clip_pairwise = summarize(pairwise_distances)
     clip_std_error = float(np.std(pairwise_distances, ddof=0) / np.sqrt(pairwise_distances.size))
     covariance_matrix = np.cov(embeddings, rowvar=False)
-    eigenvalues = np.linalg.eigvalsh(covariance_matrix)[-min(k, covariance_matrix.shape[0]):]
-    eigenvalues = np.clip(eigenvalues, 1e-12, None)
-    tce = float((len(eigenvalues) / 2) * np.log(2 * np.pi * np.e) + 0.5 * np.sum(np.log(eigenvalues)))
+    if tce_backend == "image_diversity":
+        if image_diversity_clip is None:
+            raise ValueError("image_diversity_clip is required when tce_backend='image_diversity'")
+        tce, tce_n_eigs = calculate_image_diversity_tce(
+            image_paths,
+            image_diversity_clip=image_diversity_clip,
+            k=k,
+            batch_size=diversity_batch_size,
+        )
+    else:
+        tce_n_eigs = min(k, covariance_matrix.shape[0])
+        eigenvalues = np.linalg.eigvalsh(covariance_matrix)[-tce_n_eigs:]
+        eigenvalues = np.clip(eigenvalues, 1e-12, None)
+        tce = float((len(eigenvalues) / 2) * np.log(2 * np.pi * np.e) + 0.5 * np.sum(np.log(eigenvalues)))
     lpips_distances = []
     for i, j in combinations(range(len(lpips_images)), 2):
         with torch.no_grad():
@@ -202,6 +254,8 @@ def calculate_diversity_metrics(image_paths, clip_model, clip_processor, lpips_m
     lpips_stats = summarize(lpips_distances)
     return {
         "num_images": len(image_paths),
+        "tce_backend": tce_backend,
+        "tce_n_eigs": tce_n_eigs,
         "clip_pairwise_mean": clip_pairwise["mean"],
         "clip_pairwise_std": clip_pairwise["std"],
         "clip_pairwise_min": clip_pairwise["min"],
@@ -222,6 +276,12 @@ def main():
     parser.add_argument('--batch-size', type=int, default=4, help='Batch size for evaluation')
     parser.add_argument('--run-diversity', action='store_true', help='Compute diversity metrics')
     parser.add_argument('--tce-k', type=int, default=20, help='TCE K value')
+    parser.add_argument(
+        '--diversity-backend',
+        choices=['approximate', 'image_diversity'],
+        default='approximate',
+        help='TCE backend: local CLIP-L/14 approximation or fibarrola/image_diversity CLIP ViT-B/32 implementation',
+    )
     args = parser.parse_args()
 
     EVAL_ROOTS = [Path(args.eval_root)]
@@ -229,6 +289,7 @@ def main():
     REWARD_NAMES = ["aesthetic", "hps", "image_reward", "pick", "clip"]
     RUN_DIVERSITY = args.run_diversity
     TCE_K = args.tce_k
+    DIVERSITY_BACKEND = args.diversity_backend
     DEVICE = args.device
     BATCH_SIZE = args.batch_size
     IMAGE_GLOB = "sample_*.png"
@@ -248,7 +309,12 @@ def main():
     print(f"Using device={device}, dtype={dtype}")
 
     scorers = {name: build_reward_scorer(name, dtype=dtype, device=device) for name in REWARD_NAMES}
-    clip_diversity_model, clip_diversity_processor, lpips_model = load_diversity_models(device, RUN_DIVERSITY)
+    clip_diversity_model, clip_diversity_processor, lpips_model, image_diversity_clip = load_diversity_models(
+        device,
+        RUN_DIVERSITY,
+        DIVERSITY_BACKEND,
+        TCE_K,
+    )
 
     run_summary_rows = []
     run_diversity_rows = []
@@ -304,6 +370,9 @@ def main():
                 lpips_model=lpips_model,
                 device=device,
                 k=TCE_K,
+                tce_backend=DIVERSITY_BACKEND,
+                image_diversity_clip=image_diversity_clip,
+                diversity_batch_size=BATCH_SIZE,
             )
             per_run_diversity_row = {
                 "run_id": run_id,
@@ -330,6 +399,8 @@ def main():
                 "config",
                 "prompt",
                 "num_images",
+                "tce_backend",
+                "tce_n_eigs",
                 "clip_pairwise_mean",
                 "clip_pairwise_std",
                 "clip_pairwise_min",
@@ -370,6 +441,7 @@ def main():
             "clip_pairwise_min",
             "clip_pairwise_max",
             "clip_pairwise_std_error",
+            "tce_n_eigs",
             "tce",
             "lpips_mean",
             "lpips_std",
