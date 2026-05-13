@@ -173,10 +173,28 @@ python calculate_tce.py \
   --batch-size 16
 ```
 
+To calculate one TCE over the best image from each prompt/run:
+
+```bash
+python calculate_tce.py \
+  --eval-root logs/sd_batch/batch_20260424_111205_6101 \
+  --best-per-prompt \
+  --n-eigs 20 \
+  --batch-size 16
+```
+
+By default, `--best-per-prompt` chooses the best image using `eval_rewards`
+from `final_rewards.json`, then falls back to `steer_rewards`. To choose from
+an offline evaluator score column instead, run the evaluator first and pass,
+for example, `--best-score-column pick`.
+
 Outputs:
 - Per-run `tce_image_diversity.csv` inside each run directory.
 - Batch-level `tce_image_diversity_batch.csv`.
 - Batch-level `tce_image_diversity_summary.csv`.
+- With `--best-per-prompt`: `tce_best_per_prompt_selection.csv`,
+  `tce_best_per_prompt.csv`, and staged selected images in
+  `tce_best_per_prompt_images/`.
 
 The script clamps `--n-eigs` to `num_images - 1` for each run because
 `image_diversity` requires the truncation count to be smaller than the number

@@ -2,6 +2,8 @@ import argparse
 import csv
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 
 try:
@@ -54,6 +56,69 @@ def load_metadata(run_dir):
         return json.load(f)
 
 
+def load_per_image_scores(run_dir, image_files, score_column, csv_name):
+    csv_path = run_dir / csv_name
+    if not csv_path.exists():
+        return None
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None or score_column not in reader.fieldnames or "image" not in reader.fieldnames:
+            return None
+        scores_by_image = {}
+        for row in reader:
+            image_name = row.get("image")
+            if not image_name:
+                continue
+            try:
+                scores_by_image[image_name] = float(row[score_column])
+            except (TypeError, ValueError):
+                continue
+    if not scores_by_image:
+        return None
+    scores = []
+    for image_file in image_files:
+        if image_file not in scores_by_image:
+            return None
+        scores.append(scores_by_image[image_file])
+    return score_column, scores
+
+
+def scores_from_metadata(metadata, image_files, best_reward):
+    reward_keys = []
+    if best_reward in {"auto", "eval"}:
+        reward_keys.append("eval_rewards")
+    if best_reward in {"auto", "steer"}:
+        reward_keys.append("steer_rewards")
+
+    for reward_key in reward_keys:
+        scores = metadata.get(reward_key)
+        if isinstance(scores, list) and len(scores) == len(image_files):
+            return reward_key, [float(score) for score in scores]
+    return None
+
+
+def select_best_image(run_dir, metadata, image_paths, best_reward, best_score_column, per_image_csv_name):
+    if not image_paths:
+        return None
+    image_files = [path.name for path in image_paths]
+    score_result = None
+    if best_score_column:
+        score_result = load_per_image_scores(run_dir, image_files, best_score_column, per_image_csv_name)
+    if score_result is None:
+        score_result = scores_from_metadata(metadata, image_files, best_reward)
+    if score_result is None:
+        return None
+
+    score_source, scores = score_result
+    best_idx = max(range(len(scores)), key=lambda idx: scores[idx])
+    return {
+        "image_path": image_paths[best_idx],
+        "image": image_paths[best_idx].name,
+        "score_source": score_source,
+        "score": scores[best_idx],
+    }
+
+
 def batch_run_name(run_dir):
     if run_dir.parent.name.startswith("run_"):
         return run_dir.parent.name
@@ -90,6 +155,24 @@ def calculate_tce(clip_metrics, image_paths, requested_n_eigs, batch_size):
     return float(tce), effective_n_eigs
 
 
+def safe_name(text):
+    name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", text)
+    return name.strip("._") or "run"
+
+
+def stage_best_images(selected_rows, stage_dir):
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    staged_paths = []
+    for idx, row in enumerate(selected_rows):
+        source_path = row["image_path"]
+        staged_name = f"best_{idx:05d}_{safe_name(row['run_id'])}_{source_path.name}"
+        staged_path = stage_dir / staged_name
+        shutil.copy2(source_path, staged_path)
+        row["staged_image"] = staged_name
+        staged_paths.append(staged_path)
+    return staged_paths
+
+
 def main():
     parser = argparse.ArgumentParser(description="Calculate TCE with fibarrola/image_diversity")
     parser.add_argument("--eval-root", type=Path, required=True, help="Batch root or single run directory")
@@ -97,6 +180,33 @@ def main():
     parser.add_argument("--n-eigs", type=int, default=20, help="Requested TCE eigenvalue count")
     parser.add_argument("--batch-size", type=int, default=16, help="CLIP encoding batch size")
     parser.add_argument("--output-name", default="tce_image_diversity.csv", help="Per-run CSV filename")
+    parser.add_argument(
+        "--best-per-prompt",
+        action="store_true",
+        help="Pick the best image from each prompt/run, then calculate one TCE over those selected images",
+    )
+    parser.add_argument(
+        "--best-reward",
+        choices=["auto", "eval", "steer"],
+        default="auto",
+        help="Reward list in final_rewards.json used by --best-per-prompt. auto prefers eval_rewards, then steer_rewards.",
+    )
+    parser.add_argument(
+        "--best-score-column",
+        default=None,
+        help="Optional eval_per_image.csv column used by --best-per-prompt to choose the best image",
+    )
+    parser.add_argument(
+        "--per-image-csv-name",
+        default="eval_per_image.csv",
+        help="Per-image CSV filename used with --best-score-column",
+    )
+    parser.add_argument(
+        "--best-stage-dir",
+        type=Path,
+        default=None,
+        help="Directory where selected best images are copied before batch TCE",
+    )
     args = parser.parse_args()
 
     if ClipMetrics is None:
@@ -108,6 +218,80 @@ def main():
     clip_metrics = ClipMetrics(n_eigs=args.n_eigs)
     eval_dirs = discover_eval_runs([args.eval_root], args.image_glob)
     print(f"Found {len(eval_dirs)} eval runs")
+
+    if args.best_per_prompt:
+        selected_rows = []
+        skipped = 0
+        for eval_dir in eval_dirs:
+            metadata = load_metadata(eval_dir)
+            image_files = metadata.get("image_files") or [path.name for path in sorted(eval_dir.glob(args.image_glob))]
+            image_paths = [eval_dir / name for name in image_files if (eval_dir / name).exists()]
+            best = select_best_image(
+                eval_dir,
+                metadata=metadata,
+                image_paths=image_paths,
+                best_reward=args.best_reward,
+                best_score_column=args.best_score_column,
+                per_image_csv_name=args.per_image_csv_name,
+            )
+            if best is None:
+                skipped += 1
+                print(f"[WARN] Skipping {eval_dir}: no usable reward scores for best-image selection")
+                continue
+            selected_rows.append({
+                "run_id": batch_run_name(eval_dir),
+                "eval_dir": str(eval_dir),
+                "config": metadata.get("config", eval_dir.name),
+                "prompt": metadata.get("prompt", ""),
+                **best,
+            })
+
+        batch_root = common_batch_root(eval_dirs)
+        stage_dir = resolve_path(args.best_stage_dir) if args.best_stage_dir else batch_root / "tce_best_per_prompt_images"
+        staged_paths = stage_best_images(selected_rows, stage_dir)
+        tce, effective_n_eigs = calculate_tce(
+            clip_metrics,
+            image_paths=staged_paths,
+            requested_n_eigs=args.n_eigs,
+            batch_size=args.batch_size,
+        )
+
+        selection_csv = batch_root / "tce_best_per_prompt_selection.csv"
+        selection_fields = [
+            "run_id",
+            "eval_dir",
+            "config",
+            "prompt",
+            "image",
+            "score_source",
+            "score",
+            "staged_image",
+        ]
+        with selection_csv.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=selection_fields)
+            writer.writeheader()
+            for row in selected_rows:
+                writer.writerow({field: row[field] for field in selection_fields})
+
+        result_csv = batch_root / "tce_best_per_prompt.csv"
+        result_row = {
+            "eval_root": str(resolve_path(args.eval_root)),
+            "stage_dir": str(stage_dir),
+            "num_prompts": len(selected_rows),
+            "skipped_prompts": skipped,
+            "requested_n_eigs": args.n_eigs,
+            "tce_n_eigs": effective_n_eigs,
+            "tce": tce,
+        }
+        with result_csv.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(result_row.keys()))
+            writer.writeheader()
+            writer.writerow(result_row)
+
+        print(f"Selected {len(selected_rows)} best images; skipped {skipped} runs")
+        print(f"Saved best-image selection: {selection_csv.resolve()}")
+        print(f"Saved best-image TCE: {result_csv.resolve()}")
+        return
 
     rows = []
     for eval_dir in eval_dirs:
