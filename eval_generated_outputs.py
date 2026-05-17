@@ -115,7 +115,7 @@ def load_metadata(run_dir):
 def logged_reward_series(metadata, preferred_reward="eval"):
     reward_order = {
         "eval": [("eval_rewards", "eval_reward_name"), ("steer_rewards", "steer_reward_name")],
-        "steer": [("steer_rewards", "steer_reward_name"), ("eval_rewards", "eval_reward_name")],
+        "steer": [("steer_rewards", "steer_reward_name")],
     }
     for reward_key, name_key in reward_order.get(preferred_reward, reward_order["eval"]):
         rewards = metadata.get(reward_key)
@@ -181,6 +181,27 @@ def update_best_image_selection(best_by_prompt, row):
     previous = best_by_prompt.get(prompt)
     if previous is None or row["reward"] > previous["reward"]:
         best_by_prompt[prompt] = row
+
+def normalize_reward_name(name):
+    normalized = (name or "").lower()
+    aliases = {
+        "aesthetic_score": "aesthetic",
+        "hps_score": "hps",
+        "hpsv2": "hps",
+        "image_reward_score": "image_reward",
+        "imagereward": "image_reward",
+        "pick_score": "pick",
+        "clip_score": "clip",
+    }
+    return aliases.get(normalized, normalized)
+
+def tce_fallback_reward_for_run(metadata, requested_fallback):
+    if requested_fallback != "steer":
+        return requested_fallback
+    reward_name = normalize_reward_name(metadata.get("steer_reward_name"))
+    if reward_name in {"aesthetic", "hps", "image_reward", "pick", "clip"}:
+        return reward_name
+    return None
 
 def load_image_tensor(path):
     image = Image.open(path).convert("RGB")
@@ -313,16 +334,16 @@ def main():
     parser.add_argument(
         '--tce-reward-source',
         type=str,
-        default='eval',
+        default='steer',
         choices=['eval', 'steer'],
         help='Logged reward source to prefer when selecting the best image per prompt for image-diversity TCE',
     )
     parser.add_argument(
         '--tce-fallback-reward',
         type=str,
-        default='image_reward',
-        choices=['aesthetic', 'hps', 'image_reward', 'pick', 'clip'],
-        help='Offline evaluator reward used for best-image TCE when a run has no logged final rewards',
+        default='steer',
+        choices=['steer', 'aesthetic', 'hps', 'image_reward', 'pick', 'clip'],
+        help='Offline evaluator reward used for best-image TCE when a run has no logged final rewards; steer uses the run inference reward',
     )
     args = parser.parse_args()
 
@@ -363,6 +384,7 @@ def main():
         prompt = prompt_for_run(eval_dir, metadata, PROMPT_OVERRIDE)
         run_id = batch_run_name(eval_dir)
         config = metadata.get("config", eval_dir.name)
+        tce_fallback_reward = tce_fallback_reward_for_run(metadata, args.tce_fallback_reward)
         image_files = metadata.get("image_files") or [path.name for path in sorted(eval_dir.glob(IMAGE_GLOB))]
         image_paths = [eval_dir / name for name in image_files if (eval_dir / name).exists()]
         per_run_image_rows = []
@@ -390,19 +412,20 @@ def main():
                 for reward_name in REWARD_NAMES:
                     row[reward_name] = batch_scores_by_reward[reward_name][local_idx]
                 per_run_image_rows.append(row)
-                update_best_image_selection(
-                    offline_best_by_prompt,
-                    {
-                        "prompt": prompt,
-                        "run_id": run_id,
-                        "eval_dir": str(eval_dir),
-                        "config": config,
-                        "image": image_path.name,
-                        "image_path": str(image_path),
-                        "reward_name": args.tce_fallback_reward,
-                        "reward": float(row[args.tce_fallback_reward]),
-                    },
-                )
+                if tce_fallback_reward is not None:
+                    update_best_image_selection(
+                        offline_best_by_prompt,
+                        {
+                            "prompt": prompt,
+                            "run_id": run_id,
+                            "eval_dir": str(eval_dir),
+                            "config": config,
+                            "image": image_path.name,
+                            "image_path": str(image_path),
+                            "reward_name": tce_fallback_reward,
+                            "reward": float(row[tce_fallback_reward]),
+                        },
+                    )
         for reward_name in REWARD_NAMES:
             stats = summarize(scores_by_reward[reward_name])
             per_run_summary_rows.append({
