@@ -3,9 +3,11 @@ import os
 import sys
 import csv
 import json
+import tempfile
 from pathlib import Path
 from collections import defaultdict
 from itertools import combinations
+import shutil
 
 import numpy as np
 import torch
@@ -38,6 +40,10 @@ try:
     import lpips
 except ImportError:
     lpips = None
+try:
+    from image_diversity import ClipMetrics
+except ImportError:
+    ClipMetrics = None
 
 def build_reward_scorer(name, dtype, device):
     normalized = name.lower()
@@ -106,6 +112,17 @@ def load_metadata(run_dir):
     with metadata_path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
+def logged_reward_series(metadata, preferred_reward="eval"):
+    reward_order = {
+        "eval": [("eval_rewards", "eval_reward_name"), ("steer_rewards", "steer_reward_name")],
+        "steer": [("steer_rewards", "steer_reward_name"), ("eval_rewards", "eval_reward_name")],
+    }
+    for reward_key, name_key in reward_order.get(preferred_reward, reward_order["eval"]):
+        rewards = metadata.get(reward_key)
+        if rewards is not None:
+            return rewards, metadata.get(name_key, reward_key.replace("_rewards", ""))
+    return None, None
+
 def prompt_for_run(run_dir, metadata, prompt_override):
     if prompt_override is not None:
         return prompt_override
@@ -118,6 +135,52 @@ def batch_run_name(run_dir):
     if run_dir.parent.name.startswith("run_"):
         return run_dir.parent.name
     return run_dir.name
+
+def collect_best_images_per_prompt(eval_dirs, prompt_override=None, preferred_reward="eval", image_glob="sample_*.png"):
+    best_by_prompt = {}
+    skipped = []
+    for eval_dir in eval_dirs:
+        metadata = load_metadata(eval_dir)
+        try:
+            prompt = prompt_for_run(eval_dir, metadata, prompt_override)
+        except ValueError as exc:
+            skipped.append({"eval_dir": str(eval_dir), "reason": str(exc)})
+            continue
+
+        rewards, reward_name = logged_reward_series(metadata, preferred_reward=preferred_reward)
+        if rewards is None:
+            skipped.append({"eval_dir": str(eval_dir), "prompt": prompt, "reason": "no logged eval_rewards or steer_rewards"})
+            continue
+
+        image_files = metadata.get("image_files") or [path.name for path in sorted(eval_dir.glob(image_glob))]
+        candidates = []
+        for image_name, reward in zip(image_files, rewards):
+            image_path = eval_dir / image_name
+            if image_path.exists() and reward is not None:
+                candidates.append((float(reward), image_path, image_name))
+        if not candidates:
+            skipped.append({"eval_dir": str(eval_dir), "prompt": prompt, "reason": "no image/reward pairs found"})
+            continue
+
+        reward, image_path, image_name = max(candidates, key=lambda item: item[0])
+        row = {
+            "prompt": prompt,
+            "run_id": batch_run_name(eval_dir),
+            "eval_dir": str(eval_dir),
+            "config": metadata.get("config", eval_dir.name),
+            "image": image_name,
+            "image_path": str(image_path),
+            "reward_name": reward_name,
+            "reward": reward,
+        }
+        update_best_image_selection(best_by_prompt, row)
+    return [best_by_prompt[prompt] for prompt in sorted(best_by_prompt)], skipped
+
+def update_best_image_selection(best_by_prompt, row):
+    prompt = row["prompt"]
+    previous = best_by_prompt.get(prompt)
+    if previous is None or row["reward"] > previous["reward"]:
+        best_by_prompt[prompt] = row
 
 def load_image_tensor(path):
     image = Image.open(path).convert("RGB")
@@ -155,6 +218,31 @@ def load_diversity_models(device, run_diversity):
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
     lpips_model = lpips.LPIPS(net="alex").to(device).eval()
     return clip_model, clip_processor, lpips_model
+
+def calculate_image_diversity_tce(image_paths, device, n_eigs=20, batch_size=16):
+    if len(image_paths) < 2:
+        return {"num_images": len(image_paths), "tce": np.nan}
+    if ClipMetrics is None:
+        raise ImportError(
+            "image-diversity is required for best-image TCE. Install it with: pip install image-diversity"
+        )
+    with tempfile.TemporaryDirectory(prefix="best_image_tce_") as temp_dir:
+        temp_dir = Path(temp_dir)
+        for idx, image_path in enumerate(image_paths):
+            suffix = image_path.suffix or ".png"
+            shutil.copy2(image_path, temp_dir / f"selected_{idx:04d}{suffix}")
+        kwargs = {"n_eigs": n_eigs, "batch_size": batch_size}
+        if device is not None:
+            kwargs["device"] = str(device)
+        try:
+            clip_metrics = ClipMetrics(**kwargs)
+        except TypeError:
+            clip_metrics = ClipMetrics()
+        try:
+            tce = clip_metrics.tce(str(temp_dir), n_eigs=n_eigs, batch_size=batch_size)
+        except TypeError:
+            tce = clip_metrics.tce(str(temp_dir))
+    return {"num_images": len(image_paths), "tce": float(tce)}
 
 def load_lpips_tensor(path):
     transform = transforms.Compose([
@@ -222,6 +310,20 @@ def main():
     parser.add_argument('--batch-size', type=int, default=4, help='Batch size for evaluation')
     parser.add_argument('--run-diversity', action='store_true', help='Compute diversity metrics')
     parser.add_argument('--tce-k', type=int, default=20, help='TCE K value')
+    parser.add_argument(
+        '--tce-reward-source',
+        type=str,
+        default='eval',
+        choices=['eval', 'steer'],
+        help='Logged reward source to prefer when selecting the best image per prompt for image-diversity TCE',
+    )
+    parser.add_argument(
+        '--tce-fallback-reward',
+        type=str,
+        default='image_reward',
+        choices=['aesthetic', 'hps', 'image_reward', 'pick', 'clip'],
+        help='Offline evaluator reward used for best-image TCE when a run has no logged final rewards',
+    )
     args = parser.parse_args()
 
     EVAL_ROOTS = [Path(args.eval_root)]
@@ -237,6 +339,8 @@ def main():
     RUN_DIVERSITY_CSV_NAME = "eval_run_diversity_summary.csv"
     BATCH_SUMMARY_CSV_NAME = "eval_batch_summary_from_run_stats.csv"
     BATCH_DIVERSITY_CSV_NAME = "eval_batch_diversity_summary_from_run_stats.csv"
+    BEST_IMAGE_MANIFEST_CSV_NAME = "eval_best_images_for_tce.csv"
+    BEST_IMAGE_DIVERSITY_CSV_NAME = "eval_best_image_diversity_summary.csv"
 
     eval_dirs = discover_eval_runs(EVAL_ROOTS, IMAGE_GLOB)
     print(f"Found {len(eval_dirs)} eval runs")
@@ -252,6 +356,7 @@ def main():
 
     run_summary_rows = []
     run_diversity_rows = []
+    offline_best_by_prompt = {}
 
     for eval_dir in eval_dirs:
         metadata = load_metadata(eval_dir)
@@ -285,6 +390,19 @@ def main():
                 for reward_name in REWARD_NAMES:
                     row[reward_name] = batch_scores_by_reward[reward_name][local_idx]
                 per_run_image_rows.append(row)
+                update_best_image_selection(
+                    offline_best_by_prompt,
+                    {
+                        "prompt": prompt,
+                        "run_id": run_id,
+                        "eval_dir": str(eval_dir),
+                        "config": config,
+                        "image": image_path.name,
+                        "image_path": str(image_path),
+                        "reward_name": args.tce_fallback_reward,
+                        "reward": float(row[args.tce_fallback_reward]),
+                    },
+                )
         for reward_name in REWARD_NAMES:
             stats = summarize(scores_by_reward[reward_name])
             per_run_summary_rows.append({
@@ -386,6 +504,55 @@ def main():
             })
     batch_root = common_batch_root(eval_dirs)
     print(f"Writing batch summaries to: {batch_root}")
+    if RUN_DIVERSITY:
+        best_image_rows, skipped_best_image_rows = collect_best_images_per_prompt(
+            eval_dirs,
+            prompt_override=PROMPT_OVERRIDE,
+            preferred_reward=args.tce_reward_source,
+            image_glob=IMAGE_GLOB,
+        )
+        logged_best_prompts = {row["prompt"] for row in best_image_rows}
+        for prompt, row in offline_best_by_prompt.items():
+            if prompt not in logged_best_prompts:
+                fallback_row = dict(row)
+                fallback_row["reward_name"] = f"offline_{fallback_row['reward_name']}"
+                best_image_rows.append(fallback_row)
+        best_image_rows = sorted(best_image_rows, key=lambda row: row["prompt"])
+        best_manifest_fields = ["prompt", "run_id", "eval_dir", "config", "image", "image_path", "reward_name", "reward"]
+        with (batch_root / BEST_IMAGE_MANIFEST_CSV_NAME).open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=best_manifest_fields)
+            writer.writeheader()
+            writer.writerows(best_image_rows)
+        best_image_paths = [Path(row["image_path"]) for row in best_image_rows]
+        best_tce_stats = calculate_image_diversity_tce(
+            best_image_paths,
+            device=device,
+            n_eigs=TCE_K,
+            batch_size=BATCH_SIZE,
+        )
+        best_diversity_row = {
+            "selection": "best_logged_reward_per_prompt",
+            "preferred_reward_source": args.tce_reward_source,
+            "fallback_reward": args.tce_fallback_reward,
+            "num_selected_prompts": len(best_image_rows),
+            "num_skipped_runs": len(skipped_best_image_rows),
+            **best_tce_stats,
+        }
+        best_diversity_fields = [
+            "selection",
+            "preferred_reward_source",
+            "fallback_reward",
+            "num_selected_prompts",
+            "num_skipped_runs",
+            "num_images",
+            "tce",
+        ]
+        with (batch_root / BEST_IMAGE_DIVERSITY_CSV_NAME).open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=best_diversity_fields)
+            writer.writeheader()
+            writer.writerow(best_diversity_row)
+        if skipped_best_image_rows:
+            print(f"Skipped {len(skipped_best_image_rows)} runs without usable logged rewards for best-image TCE")
     batch_summary_fields = ["reward", "run_stat", "num_runs", "mean", "std", "min", "max"]
     with (batch_root / BATCH_SUMMARY_CSV_NAME).open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=batch_summary_fields)
@@ -402,6 +569,8 @@ def main():
     if RUN_DIVERSITY:
         print(f"Saved per-run diversity file inside each eval_dir: {RUN_DIVERSITY_CSV_NAME}")
         print(f"Saved batch diversity summary from run stats: {(batch_root / BATCH_DIVERSITY_CSV_NAME).resolve()}")
+        print(f"Saved best-image TCE manifest: {(batch_root / BEST_IMAGE_MANIFEST_CSV_NAME).resolve()}")
+        print(f"Saved best-image image-diversity TCE: {(batch_root / BEST_IMAGE_DIVERSITY_CSV_NAME).resolve()}")
 
 if __name__ == "__main__":
     main()
