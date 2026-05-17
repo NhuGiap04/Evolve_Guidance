@@ -589,8 +589,13 @@ def pipeline_using_gradient_sdxl(
             end_idx = start_idx + reward_chunk_size
             lat_chunk = current_latents[start_idx:end_idx].detach().requires_grad_(True)
 
+            # Treat the UNet prediction as a fixed x0 estimate for guidance.
+            # This avoids storing the SDXL UNet backward graph while preserving
+            # gradients through x_t -> pred_x0 -> VAE decode -> reward.
+            with torch.no_grad():
+                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx).detach()
+
             with torch.enable_grad():
-                noise_pred_chunk = _predict_noise(lat_chunk, t, start_idx=start_idx, end_idx=end_idx)
                 pred_x0_chunk, _, _ = _predict_x0(lat_chunk, _to_timestep_int(t), noise_pred_chunk)
                 images_chunk = _decode_latents_for_reward(self, pred_x0_chunk)
                 reward_chunk = reward_fn(images_chunk, prompt_particles[start_idx:end_idx])
