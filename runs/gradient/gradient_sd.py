@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--batch-p", type=int, default=None, help="Optional reward-gradient micro-batch particle count.")
     parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
     parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
-    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
+    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf", "rbf-full"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
     parser.add_argument(

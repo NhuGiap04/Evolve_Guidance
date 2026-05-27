@@ -247,7 +247,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-p", type=int, default=None)
     parser.add_argument("--stein-step", type=float, default=None)
     parser.add_argument("--stein-loop", type=int, default=None)
-    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
+    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf", "rbf-full"])
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--monitor-status", action="store_true")
