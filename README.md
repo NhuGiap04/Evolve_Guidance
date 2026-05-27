@@ -201,7 +201,7 @@ SD default checkpoint:
 - `--batch-p`: reward evaluation / reward-gradient micro-batch size over particles
 - `--stein-loop`: Stein updates per steered step
 - `--stein-step`: Stein step size
-- `--stein-kernel`: Stein kernel (`rbf`)
+- `--stein-kernel`: Stein kernel (`rbf`, `rbf-full`)
 - `--stein-adagrad-eps`: AdaGrad epsilon for Stein step adaptation
 - `--kl-coeff`: reward scaling denominator
 - `--prediction-model`: approx-only clean prediction backend (`default`, `dpm`, `lcm`, `dmd`; `lcm` and `dmd` are reserved)
@@ -209,6 +209,11 @@ SD default checkpoint:
 - `--lookahead-steps`: internal clean-prediction solver steps for lookahead-capable prediction models
 - `--monitor-status`: print per-step latent delta diagnostics
 - `--steer-start`, `--steer-end`: steering window (0-based step index)
+
+Stein kernel modes:
+
+- `rbf`: computes the RBF kernel directly on the current noisy latents.
+- `rbf-full`: gradient runners only. Computes the RBF kernel on decoded clean-latent estimates `f(x_t)`, where `f` maps the current latent to predicted `x_0` and decodes it through the VAE. It uses the same median pairwise-distance bandwidth rule as `rbf`, but is slower and uses more memory because the repulsion term backpropagates through the decoder.
 
 ### Batch-only Options
 
