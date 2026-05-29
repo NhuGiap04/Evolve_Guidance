@@ -96,6 +96,11 @@ def parse_args():
         help="Optional fixed reward scale (e.g. 10000).",
     )
     parser.add_argument(
+        "--cpu-offload",
+        action="store_true",
+        help="Enable model CPU offload to reduce peak VRAM usage.",
+    )
+    parser.add_argument(
         "--steer-start",
         type=int,
         default=None,
@@ -366,11 +371,9 @@ def main():
     if inference_dtype == torch.float16:
         load_kwargs["variant"] = "fp16"
 
-    pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
+    pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs)
     pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
-    pipe.enable_vae_slicing()
-    pipe.enable_attention_slicing("max")
 
     # Keep VAE in fp32 for decode stability.
     # Keep text encoders in UNet/inference dtype to avoid cross-attention dtype mismatch.
@@ -378,6 +381,19 @@ def main():
     pipe.text_encoder.to(dtype=inference_dtype)
     if hasattr(pipe, "text_encoder_2") and pipe.text_encoder_2 is not None:
         pipe.text_encoder_2.to(dtype=inference_dtype)
+
+    if args.cpu_offload and device.type == "cuda":
+        try:
+            pipe.enable_model_cpu_offload()
+            print("[INFO] Enabled model CPU offload for lower VRAM usage.")
+        except Exception as exc:
+            print(f"[WARN] CPU offload unavailable ({exc}); falling back to full GPU placement.")
+            pipe = pipe.to(device)
+    else:
+        pipe = pipe.to(device)
+
+    pipe.enable_vae_slicing()
+    pipe.enable_attention_slicing("max")
 
     steer_scorer = build_reward_scorer(config.reward_fn, dtype=inference_dtype, device=device)
     eval_scorer = None
