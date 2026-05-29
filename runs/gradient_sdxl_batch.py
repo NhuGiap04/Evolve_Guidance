@@ -325,6 +325,7 @@ def _build_sdxl_cmd(args: argparse.Namespace, prompt: str, run_output_dir: Path,
     _append_optional_arg(cmd, "--stein-adagrad-eps", args.stein_adagrad_eps)
     _append_optional_arg(cmd, "--kl-coeff", args.kl_coeff)
     _append_optional_arg(cmd, "--reward-guidance-rho", args.reward_guidance_rho)
+    _append_optional_arg(cmd, "--reward-scale-fixed", args.reward_scale_fixed)
     _append_optional_arg(cmd, "--steer-start", args.steer_start)
     _append_optional_arg(cmd, "--steer-end", args.steer_end)
 
@@ -600,6 +601,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace-decode-batch-size", type=int, default=None)
     parser.add_argument("--trace-eval-batch", type=int, default=None)
     parser.add_argument("--intermediate-max-samples", type=int, default=None)
+    parser.add_argument("--reward-scale-fixed", type=float, default=None)
 
     parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")
     parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")
