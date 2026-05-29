@@ -579,6 +579,16 @@ def pipeline_using_gradient_sdxl(
 
         return noise_pred_local
 
+    def _predict_noise_in_batches(current_latents: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        if current_latents.shape[0] <= reward_chunk_size:
+            return _predict_noise(current_latents, t)
+
+        noise_chunks: List[torch.Tensor] = []
+        for start_idx in range(0, current_latents.shape[0], reward_chunk_size):
+            end_idx = start_idx + reward_chunk_size
+            noise_chunks.append(_predict_noise(current_latents[start_idx:end_idx], t, start_idx=start_idx, end_idx=end_idx))
+        return torch.cat(noise_chunks, dim=0)
+
     def _predict_x0(current_latents: torch.Tensor, t_int: int, noise_pred_local: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         alpha_bar_t = self.scheduler.alphas_cumprod[t_int].to(device=current_latents.device, dtype=current_latents.dtype)
         sqrt_alpha_bar_t = torch.sqrt(torch.clamp(alpha_bar_t, min=1e-6))
@@ -657,7 +667,7 @@ def pipeline_using_gradient_sdxl(
                 continue
 
             t_int = _to_timestep_int(t)
-            noise_pred = _predict_noise(latents, t)
+            noise_pred = _predict_noise_in_batches(latents, t)
             is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
 
             pre_stein_latents = None
@@ -683,7 +693,7 @@ def pipeline_using_gradient_sdxl(
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
 
                 for loop_idx in range(stein_loop):
-                    noise_pred_for_score = _predict_noise(latents, t)
+                    noise_pred_for_score = _predict_noise_in_batches(latents, t)
                     pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_score)
                     if loop_idx == 0:
                         pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
@@ -800,7 +810,7 @@ def pipeline_using_gradient_sdxl(
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
 
             # Pred x0|t = x0(steered_xt)
-            steered_noise_pred = _predict_noise(latents, t)
+            steered_noise_pred = _predict_noise_in_batches(latents, t)
             pred_x0, _, _ = _predict_x0(latents, t_int, steered_noise_pred)
             if is_steered_step:
                 post_stein_pred_x0 = pred_x0.detach().clone()
