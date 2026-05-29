@@ -1,11 +1,10 @@
-import os
 import importlib.util
 from pathlib import Path
 from urllib.request import urlretrieve
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import CLIPProcessor
+from PIL import Image
 
 
 _BPE_VOCAB_NAME = "bpe_simple_vocab_16e6.txt.gz"
@@ -38,7 +37,6 @@ def ensure_hpsv2_bpe_vocab():
 
 ensure_hpsv2_bpe_vocab()
 
-import hpsv2
 from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
 
 
@@ -57,15 +55,32 @@ def find_hpsv2_checkpoint():
         ) from exc
 
 
+def tensor_to_pil(image):
+    """Convert a CHW tensor in [0, 1] (or uint8) to a PIL RGB image."""
+    if image.dtype == torch.uint8:
+        array = image.detach().permute(1, 2, 0).cpu().numpy()
+    else:
+        array = (
+            image.detach()
+            .clamp(0, 1)
+            .mul(255)
+            .round()
+            .clamp(0, 255)
+            .to(torch.uint8)
+            .permute(1, 2, 0)
+            .cpu()
+            .numpy()
+        )
+    return Image.fromarray(array)
+
+
 class HPSv2Scorer(torch.nn.Module):
     def __init__(self, dtype, device):
         super().__init__()
         self.dtype = dtype
         self.device = device
 
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
-
-        self.model, _, _ = create_model_and_transforms(
+        self.model, _, self.preprocess_val = create_model_and_transforms(
             'ViT-H-14',
             'laion2B-s32B-b79K',
             precision=self.dtype,
@@ -92,15 +107,22 @@ class HPSv2Scorer(torch.nn.Module):
         self.model = self.model.to(self.device, dtype=self.dtype)
         self.model.eval()
 
+    def preprocess_images(self, images):
+        """Apply OpenCLIP val preprocessing (same as official hpsv2.score)."""
+        return torch.stack(
+            [self.preprocess_val(tensor_to_pil(image)) for image in images],
+            dim=0,
+        ).to(device=self.device, dtype=self.dtype)
+
     @torch.no_grad()
     def __call__(self, images, prompts):
-        images = (images * 255).round().clamp(0, 255).to(torch.uint8)
-        inputs = self.processor(images=images, return_tensors="pt")
-        inputs = {k: v.to(self.dtype).to(self.device) for k, v in inputs.items()}["pixel_values"]
+        inputs = self.preprocess_images(images)
         text = self.tokenizer(prompts).to(self.device)
-        outputs = self.model(inputs, text)
+        if self.device.type == "cuda":
+            with torch.cuda.amp.autocast(dtype=self.dtype):
+                outputs = self.model(inputs, text)
+        else:
+            outputs = self.model(inputs, text)
         image_features, text_features = outputs["image_features"], outputs["text_features"]
         logits_per_image = image_features @ text_features.T
-        scores = torch.diagonal(logits_per_image)
-
-        return scores
+        return torch.diagonal(logits_per_image)
