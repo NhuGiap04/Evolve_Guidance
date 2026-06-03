@@ -1,4 +1,4 @@
-# EVO v1 Plan: Stein-Transport Sampling
+# Stein-Transport Sampling - Gradient-based
 
 This document specifies the implementation plan for replacing the current SMC-style sampling logic with a Stein-transport update while keeping the SDXL denoising structure from DAS.
 
@@ -49,7 +49,7 @@ Add:
 
 ## 3.1 Pipeline Call Arguments
 
-In `seg/diffusers_patch/pipeline_using_Stein_SDXL.py`, keep existing Stein args and add/refine:
+In `text2img/diffusers_patch/pipeline_using_gradient_SDXL.py`, keep existing Stein args and add/refine:
 
 - `num_particles: int = 4`
 - `stein_loop: int = 1` (this is `M`)
@@ -73,7 +73,7 @@ Validation:
 
 ## 3.2 Config Surface
 
-Expose in config (via `config/general.py` and preset overrides):
+Expose in config (via `text2img/config/general.py` and preset overrides):
 
 - `sample.num_particles`
 - `sample.stein_loop`
@@ -82,7 +82,7 @@ Expose in config (via `config/general.py` and preset overrides):
 - `sample.steer_start`
 - `sample.steer_end`
 
-Pass through in runner callsites (`runs/gradient/gradient_sdxl.py`, `runs/gradient/gradient_sd.py`) when invoking pipeline.
+Pass through in runner callsites (`text2img/runs/grad_sdxl.py`, `text2img/runs/grad_sd.py`) when invoking pipeline.
 
 ## 4. Mathematical Formulation to Implement
 
@@ -224,18 +224,18 @@ for t in timesteps:
 
 ## 8. Code Change Plan by File
 
-1. `seg/diffusers_patch/gradient/pipeline_using_gradient_SDXL.py` and `seg/diffusers_patch/gradient/pipeline_using_gradient_SD.py`
+1. `text2img/diffusers_patch/pipeline_using_gradient_SDXL.py` and `text2img/diffusers_patch/pipeline_using_gradient_SD.py`
 	- Implement full particle-aware Stein loop in denoising steps.
 	- Remove any remaining SMC bookkeeping assumptions.
 	- Add steering range argument handling (`steer_start`, `steer_end`).
 	- Implement manifold-preserving proposal update.
 	- Return optional traces (rewards, step norms, particle latents) for debugging.
 
-2. `runs/gradient/gradient_sdxl.py` and `runs/gradient/gradient_sd.py`
+2. `text2img/runs/grad_sdxl.py` and `text2img/runs/grad_sd.py`
 	- Pass sampling arguments from config to pipeline call.
 	- Keep existing reward scorer wiring.
 
-3. `config/general.py` and `config/sdxl.py`
+3. `text2img/config/general.py` and `text2img/config/sdxl.py`
 	- Add defaults for Stein and steering parameters.
 	- Optionally define presets for quick ablations (`stein_loop`, `stein_step`, steering range).
 

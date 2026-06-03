@@ -1,2 +1,0 @@
-"""Runnable sampling entry points."""
-

@@ -1,2 +1,0 @@
-"""Approximation sampler entry points."""
-

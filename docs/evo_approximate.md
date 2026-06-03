@@ -1,4 +1,4 @@
-# EVO Approximation: Soft Good-Probability Stein Guidance
+# Stein-Transport Sampling - Approximation-based
 
 This document specifies the approximate EVO sampler that steers diffusion particles with a soft reward-tilted good probability. It removes the hard Good/Bad particle split and replaces it with a Monte Carlo estimate of the good-conditioned diffusion density.
 

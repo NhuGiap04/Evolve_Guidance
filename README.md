@@ -1,240 +1,193 @@
-# Self-Improving Guidance
+# Self-Evolving Guidance
 
-Stein-guided SDXL and SD sampling for reward optimization.
+Experiment code for self-evolving test-time guidance methods. The repository
+contains Stein-guided text-to-image diffusion experiments, offline RL flow
+guidance baselines, and a discrete diffusion workspace for text generation
+guidance and evaluation. Each experiment family keeps its runners, models, and
+setup notes in a separate section.
 
-## Setup
+## Repository Map
+
+- `text2img/`: text-to-image configs, runners, reward models, scorers, prompts, and patched diffusion pipelines.
+- `offline_rl/`: Guided Flow Planner experiments for D4RL locomotion tasks.
+- `discrete_diffusion/`: discrete diffusion migration workspace and evaluation tools.
+- `docs/`: design notes and implementation plans.
+- `logs/`: generated outputs, when created.
+
+## Experiments
+
+### Text-To-Image Stein Guidance
+
+#### Setup
+
+From the repository root:
 
 ```bash
-pip install -e .
+cd text2img
+pip install -r requirements.txt
 pip install --no-deps image-reward
 ```
 
-## Quick Start
+Optional reward models:
 
-### SDXL
+- HPSv2: install from `https://github.com/tgxs002/HPSv2`
+- ImageReward: `pip install --no-deps image-reward`
 
-#### Gradient Stein Guidance
+Entry points:
 
-Single prompt:
+| Script | Model | Guidance |
+| --- | --- | --- |
+| `text2img/runs/grad_sd.py` | Stable Diffusion 1.5 | reward-gradient Stein |
+| `text2img/runs/grad_sdxl.py` | SDXL | reward-gradient Stein |
+| `text2img/runs/approx_sd.py` | Stable Diffusion 1.5 | approximate reward Stein |
+| `text2img/runs/approx_sdxl.py` | SDXL | approximate reward Stein |
 
-```bash
-python runs/gradient/gradient_sdxl.py \
-  --config pick \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --num-steps 100 \
-  --num-particles 4 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --monitor-status \
-  --steer-start 0 \
-  --steer-end 20 \
-  --output-dir logs/sdxl
-```
-
-Batch prompts:
+#### Running Experiments
 
 ```bash
-python runs/gradient/sdxl_batch.py \
-  --prompts-file prompts/hps_v2_all_eval.txt \
-  --config pick \
-  --device cuda \
-  --num-steps 100 \
-  --num-particles 4 \
-  --batch-p 1 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --steer-start 0 \
-  --steer-end 20 \
-  --verbose --trace-eval-batch 1 \
-  --output-dir logs/sdxl_batch
+python runs/grad_sd.py
+python runs/grad_sdxl.py
+python runs/approx_sd.py
+python runs/approx_sdxl.py
 ```
 
-#### Approximate Guidance
+Use `--prompts-file` for batch experiments.
 
-Single prompt:
-
-```bash
-python runs/approx/approx_sdxl.py \
-  --config image_reward \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --num-steps 100 \
-  --num-particles 4 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --prediction-model default \
-  --predicted-samples 1 \
-  --monitor-status \
-  --steer-start 0 \
-  --steer-end 20 \
-  --output-dir logs/sdxl_approx
-```
-
-Batch prompts:
-
-```bash
-python runs/approx/sdxl_batch.py \
-  --prompts-file prompts/hps_v2_all_eval.txt \
-  --config image_reward \
-  --device cuda \
-  --num-steps 100 \
-  --num-particles 4 \
-  --batch-p 1 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --prediction-model default \
-  --predicted-samples 1 \
-  --steer-start 0 \
-  --steer-end 20 \
-  --verbose --trace-eval-batch 1 \
-  --output-dir logs/sdxl_approx_batch
-```
-
-### Stable Diffusion 1.5
-
-#### Gradient Stein Guidance
-
-Single prompt:
-
-```bash
-python runs/gradient/gradient_sd.py \
-  --config pick \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --num-steps 100 \
-  --num-particles 4 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --monitor-status \
-  --steer-start 0 \
-  --steer-end 20 \
-  --output-dir logs/sd
-```
-
-Batch prompts:
-
-```bash
-python runs/gradient/sd_batch.py \
-  --prompts-file prompts/hps_v2_all_eval.txt \
-  --config pick \
-  --device cuda \
-  --num-steps 100 \
-  --num-particles 4 \
-  --batch-p 1 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --steer-start 0 \
-  --steer-end 20 \
-  --verbose --trace-eval-batch 1 \
-  --output-dir logs/sd_batch
-```
-
-#### Approximate Guidance
-
-Single prompt:
-
-```bash
-python runs/approx/approx_sd.py \
-  --config image_reward \
-  --prompt "A cinematic portrait of a fox astronaut" \
-  --num-steps 100 \
-  --num-particles 4 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --prediction-model default \
-  --predicted-samples 1 \
-  --monitor-status \
-  --steer-start 0 \
-  --steer-end 20 \
-  --output-dir logs/sd_approx
-```
-
-Batch prompts:
-
-```bash
-python runs/approx/sd_batch.py \
-  --prompts-file prompts/hps_v2_all_eval.txt \
-  --config image_reward \
-  --device cuda \
-  --num-steps 100 \
-  --num-particles 4 \
-  --batch-p 1 \
-  --stein-loop 1 \
-  --stein-step 0.005 \
-  --prediction-model default \
-  --predicted-samples 1 \
-  --steer-start 0 \
-  --steer-end 20 \
-  --verbose --trace-eval-batch 1 \
-  --output-dir logs/sd_approx_batch
-```
-
-Useful flags:
-
-- `--start-index 100 --max-prompts 50`: run a slice of prompts.
-- `--stop-on-error`: stop on first failed prompt.
-- `--dry-run`: print commands without running them.
-- `--monitor-status`: print per-step latent steering stats. Gradient runners report reward-gradient diagnostics; approx runners report soft good-score diagnostics.
-- `--verbose --trace-eval-batch 1`: save deferred reward traces and control trace decode/eval batching.
-
-Batch outputs:
-
-- One run directory per prompt under `--output-dir`.
-- Per-run logs in `<output-dir>/_batch_logs` (`*.stdout.log`, `*.stderr.log`).
-- Batch summary CSV in `<output-dir>/batch_eval_summary.csv` with steering stats plus final stats for `clip`, `pick`, `image_reward`, `aesthetic`, and `hpsv2`.
-
-SD default checkpoint:
-
-- `runwayml/stable-diffusion-v1-5` (from `config/sd.py`)
-
-### Main Options
-
-- `--config`: reward preset (`pick`, `clip`, `image_reward`, `aesthetic`, `hpsv2`)
-- `--prompt`: text prompt
-- `--negative-prompt`: negative prompt text
-- `--output-dir`: output root for artifacts
-- `--device`: execution device (`cuda`, `cpu`, etc.)
-- `--seed`: random seed override
-- `--num-steps`: denoising steps
-- `--batch-size`: number of base samples per prompt
-- `--guidance-scale`: CFG strength
-- `--eta`: DDIM eta
-- `--num-particles`: particle count for Stein guidance
-- `--batch-p`: reward evaluation / reward-gradient micro-batch size over particles
-- `--stein-loop`: Stein updates per steered step
-- `--stein-step`: Stein step size
-- `--stein-kernel`: Stein kernel (`rbf`, `rbf-full`)
-- `--stein-adagrad-eps`: AdaGrad epsilon for Stein step adaptation
-- `--kl-coeff`: reward scaling denominator
-- `--prediction-model`: approx-only clean prediction backend (`default`, `dpm`, `lcm`, `dmd`; `lcm` and `dmd` are reserved)
-- `--predicted-samples`: approx-only number of predicted clean samples per particle
-- `--lookahead-steps`: internal clean-prediction solver steps for lookahead-capable prediction models
-- `--monitor-status`: print per-step latent delta diagnostics
-- `--steer-start`, `--steer-end`: steering window (0-based step index)
-
-Stein kernel modes:
-
-- `rbf`: computes the RBF kernel directly on the current noisy latents.
-- `rbf-full`: gradient runners only. Computes the RBF kernel on decoded clean-latent estimates `f(x_t)`, where `f` maps the current latent to predicted `x_0` and decodes it through the VAE. It uses the same median pairwise-distance bandwidth rule as `rbf`, but is slower and uses more memory because the repulsion term backpropagates through the decoder.
-
-### Batch-only Options
+#### Important Arguments
 
 - `--prompts-file`: input prompts file (`.txt` or `.json`)
-- `--gradient-script`, `--approx-script`, `--sd-script`, `--sdxl-script`: single-run script path override
-- `--python`: python executable used for each spawned run
-- `--start-index`, `--max-prompts`: run a prompt slice
-- `--stop-on-error`: stop on first failing run
-- `--dry-run`: print generated commands only
-- `--log-dir`: override batch log directory
-- `--trace-eval-batch`: decode/eval micro-batch size for deferred reward traces
+- `--config`: reward preset, one of `pick`, `clip`, `image_reward`, `aesthetic`, `hpsv2`
+- `--device`: execution device, for example `cuda`
+- `--output-dir`: output root
+- `--seed`: random seed override
+- `--num-steps`: denoising steps
+- `--num-particles`: particle count
+- `--batch-p`: reward micro-batch size over particles
+- `--stein-loop`: Stein updates per steered step
+- `--stein-step`: Stein update size
+- `--stein-kernel`: `rbf`; gradient runners also support `rbf-full`
+- `--steer-start`, `--steer-end`: 0-based steering window
+- `--monitor-status`: print per-step steering diagnostics
+- `--verbose`: save deferred reward traces
+- `--start-index`, `--max-prompts`: select a prompt slice in batch mode
+- `--stop-on-error`: stop batch execution on the first failed prompt
+- `--dry-run`: print planned runs without executing them
+- `--prediction-model`: approx-only clean prediction backend
+- `--predicted-samples`: approx-only number of predicted clean samples per particle
+- `--lookahead-steps`: approx-only clean-prediction solver steps
 
-### Outputs
+#### Outputs
 
-SDXL gradient examples save in `logs/sdxl/<config>_seed<seed>`.
+Batch runs write to:
 
-SD gradient examples save in `logs/sd/<config>_seed<seed>`.
+```text
+<output-dir>/run_<idx>_<prompt-slug>/<config>_seed<seed>/
+<output-dir>/_batch_logs/
+<output-dir>/batch_eval_summary.csv
+```
 
-Each run directory contains:
+Run directories contain generated images, `final_rewards.json`, and, when
+`--verbose` is enabled, `steer_trace.csv` plus before/after reward plots.
 
-- Final particle images (`sample_*.png`)
-- Final reward summary (`final_rewards.json`) including steering rewards and final-particle scores for `clip`, `pick`, `image_reward`, `aesthetic`, and `hpsv2`
-- Deferred reward traces (`steer_trace.csv`) when `--verbose` is enabled
-- Steer reward plots (`steer_before_after_mean.png`, `steer_before_after_max.png`) when enabled
+### Offline RL Flow Guidance
+
+The `offline_rl/` folder contains the Guided Flow Planner (`gflower`) offline RL
+experiments adapted from the flow guidance baseline. These runs train flow
+matching trajectory models on D4RL locomotion tasks, train value/guidance models,
+and evaluate gradient, Monte Carlo, simulation Monte Carlo, and guidance-matching
+variants.
+
+#### Setup
+
+The offline RL stack uses older MuJoCo/D4RL dependencies. Change into the
+`offline_rl/` folder and create the pinned environment:
+
+```bash
+cd offline_rl
+conda env create -f environment.yml
+conda activate gflower
+pip install -e .
+```
+
+MuJoCo 2.1 is required by `mujoco-py`:
+
+```bash
+wget https://mujoco.org/download/mujoco210-linux-x86_64.tar.gz
+mkdir -p ~/.mujoco
+tar -xvzf mujoco210-linux-x86_64.tar.gz -C ~/.mujoco
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/.mujoco/mujoco210/bin
+export MUJOCO_PY_MUJOCO_PATH=$HOME/.mujoco/mujoco210
+```
+
+If `mujoco-py` fails to compile, install GL/GCC support from conda-forge and
+rebuild with the conda compiler:
+
+```bash
+conda install -c conda-forge gcc glew mesalib -y
+export CC=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc
+export CXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
+export LDSHARED="$CC -shared"
+export CFLAGS="-Wno-error=incompatible-pointer-types"
+export LDFLAGS="-Wl,-rpath,$CONDA_PREFIX/lib"
+pip install --force-reinstall --no-build-isolation --no-cache-dir "cython<3" "mujoco-py==2.1.2.14"
+```
+
+D4RL locomotion datasets are downloaded automatically to `~/.d4rl` when the
+training scripts first access them.
+
+#### Running Experiments
+
+Run these commands from inside `offline_rl/` after activating `gflower`:
+
+```bash
+bash run_scripts/train.sh
+bash run_scripts/train_value.sh
+bash run_scripts/eval_gradient.sh
+bash run_scripts/eval_mc.sh
+bash run_scripts/eval_sim_mc.sh
+bash run_scripts/run_guidance_matching.sh
+```
+
+Script roles:
+
+- `train.sh`: train CFM and OT-CFM base trajectory flow models.
+- `train_value.sh`: train the value model used by guided evaluation.
+- `eval_gradient.sh`: evaluate value-gradient guidance variants.
+- `eval_mc.sh`: evaluate Monte Carlo guidance.
+- `eval_sim_mc.sh`: evaluate simulation Monte Carlo guidance.
+- `run_guidance_matching.sh`: train and evaluate learned guidance matching
+  models.
+
+These scripts sweep over `halfcheetah`, `hopper`, and `walker2d` D4RL datasets.
+For quick smoke tests, reduce the loops in the shell scripts or run the
+corresponding `python run/*.py` command directly with fewer training steps.
+
+### Discrete Diffusion
+
+This area is prepared for future discrete diffusion experiments.
+
+Current utilities:
+
+- `discrete_diffusion/evaluation/mdlm_to_eval_format.py`: convert MDLM-style samples to SSD-LM evaluation format.
+- `discrete_diffusion/evaluation/compute_metrics.sh`: compute PPL, CoLA, diversity, and toxicity metrics for generated JSONL files.
+- `discrete_diffusion/evaluation/aggregate_over_seeds_mdlm.py`: aggregate metric files across seeds or repeated runs.
+- `discrete_diffusion/reward_functions.py`: reward/model scoring utilities.
+
+Suggested section pattern for new experiment families:
+
+```text
+### <Experiment Family>
+
+Goal:
+Entry points:
+Minimal command:
+Important arguments:
+Output layout:
+Evaluation:
+```
+
+## Notes
+
+- SD 1.5 defaults to `runwayml/stable-diffusion-v1-5` from `text2img/config/sd.py`.
+- SDXL defaults are defined in `text2img/config/sdxl.py`.
+- Keep new experiment families in separate folders and add one compact README section per family.

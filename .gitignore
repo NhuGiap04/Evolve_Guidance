@@ -211,6 +211,3 @@ __marimo__/
 
 # Jupyter
 *.ipynb
-
-logs/
-clean_pycache.sh
