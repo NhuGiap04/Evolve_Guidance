@@ -4,6 +4,8 @@ export MPLBACKEND=${MPLBACKEND:-Agg}
 
 conda activate gflower
 
+grad_particles=8
+
 for flow_matching_type in cfm ot_cfm; do
     for env in halfcheetah hopper walker2d; do
         for dataset in medium-expert medium medium-replay; do
@@ -38,7 +40,7 @@ for flow_matching_type in cfm ot_cfm; do
                             --device cuda:0 \
                             --seed 0 \
                             --random_repeat 5 \
-                            --exp_name "$flow_prefix"H20_1e6steps_gradient_10steps_inf_"$scale"_"$schedule"_grad_at_"$grad_at"_grad_to_"$grad_to" \
+                            --exp_name "$flow_prefix"H20_1e6steps_gradient_10steps_inf_K"$grad_particles"_"$scale"_"$schedule"_grad_at_"$grad_at"_grad_to_"$grad_to" \
                             --env $env-$dataset-v2 \
                             --state_dim $state_dim \
                             --action_dim $action_dim \
@@ -50,6 +52,7 @@ for flow_matching_type in cfm ot_cfm; do
                             --value_cp 2 \
                             --ode_t_steps 10 \
                             --guidance_method gradient \
+                            --batch_size $grad_particles \
                             --grad_compute_at $grad_at \
                             --grad_wrt $grad_to \
                             --grad_schedule $schedule \

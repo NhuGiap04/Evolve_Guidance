@@ -308,10 +308,15 @@ class FlowPolicy(nn.Module):
         observations = self.normalizer.unnormalize(normed_observations, 'observations')
         
         values = self.value_model(torch.cat([normed_actions, normed_observations], dim=-1))
-        trajectories = Trajectories(actions, observations, values)
-        
-        # TODO: Add more "guidance" methods, including sample and selection-based MPC
-        actions = actions[0, 0] # simply get the first action in the first sample in the batch
+        final_values = values[:, -1, 0]
+        best_idx = final_values.argmax()
+
+        trajectories = Trajectories(
+            to_np(actions[best_idx]),
+            to_np(observations[best_idx]),
+            to_np(final_values[best_idx]),
+        )
+        actions = to_np(actions[best_idx, 0])
         
         return actions, trajectories
 
