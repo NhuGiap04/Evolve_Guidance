@@ -87,6 +87,8 @@ class FlowPolicy(nn.Module):
             return self.ss_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['gradient']:
             return self.gradient_forward(conditions, batch_size)
+        elif self.cfg.guidance_method in ['stein']:
+            return self.stein_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['mc']:
             return self.mc_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['no']:
@@ -198,6 +200,41 @@ class FlowPolicy(nn.Module):
 
     ### Taylor Expansion Approximate Gradient Guidance ###
 
+    def _canonical_grad_location(self, location):
+        aliases = {
+            'x1': 'x_1',
+            'x_1': 'x_1',
+            'xt': 'x_t',
+            'x_t': 'x_t',
+        }
+        if location not in aliases:
+            raise ValueError(f"Unsupported gradient location: {location}")
+        return aliases[location]
+
+    def _compute_value_gradient(self, x, t, dx_dt, value_model, schedule_fn, scale, grad_at, grad_to):
+        grad_at = self._canonical_grad_location(grad_at)
+        grad_to = self._canonical_grad_location(grad_to)
+
+        if grad_at == 'x_t':
+            x1_pred = None
+            value = value_model(x)[:, -1, 0] # (B, T, 1) -> (B,)
+        elif grad_at == 'x_1':
+            x1_pred = x + (1 - t) * dx_dt
+            value = value_model(x1_pred)[:, -1, 0] # (B, T, 1) -> (B,)
+        else:
+            raise ValueError(f"Unsupported gradient compute at: {grad_at}")
+
+        if grad_to == 'x_t':
+            grad = torch.autograd.grad([value.sum()], [x])[0]
+        elif grad_to == 'x_1':
+            if grad_at != 'x_1':
+                raise ValueError("cannot compute gradient wrt x_1 when grad_at is x_t")
+            grad = torch.autograd.grad([value.sum()], [x1_pred])[0]
+        else:
+            raise ValueError(f"Unsupported gradient compute wrt: {grad_to}")
+
+        return grad * scale * schedule_fn(t)
+
     def get_gradient_guidance_model(self, value_model, schedule_fn, scale, grad_at='x_1', grad_to='x_1'):
         """
         Return the guidance model for the flow model.
@@ -205,21 +242,16 @@ class FlowPolicy(nn.Module):
         assert self.cfg.guidance_method in ['gradient'], f"Unsupported guidance method: {self.cfg.guidance_method}"
 
         def guide_fn(x, t, dx_dt, flow_model):
-            if grad_at == 'x_t':
-                value = value_model(x)[:, -1, 0] # (B, T, 1) -> (B,)
-            elif grad_at == 'x_1':
-                x1_pred = x + (1 - t) * dx_dt
-                value = value_model(x1_pred)[:, -1, 0] # (B, T, 1) -> (B,)
-            else:
-                raise ValueError(f"Unsupported gradient compute at: {grad_at}")
-            if grad_to == 'x_t':
-                grad = torch.autograd.grad([value.sum()], [x])[0]
-            elif grad_to == 'x_1':
-                assert grad_at == 'x_1', "cannot compute gradient wrt x_1 when grad_at is x_t"
-                grad = torch.autograd.grad([value.sum()], [x1_pred])[0]
-            else:
-                raise ValueError(f"Unsupported gradient compute at: {grad_to}")
-            return grad * scale * schedule_fn(t)
+            return self._compute_value_gradient(
+                x=x,
+                t=t,
+                dx_dt=dx_dt,
+                value_model=value_model,
+                schedule_fn=schedule_fn,
+                scale=scale,
+                grad_at=grad_at,
+                grad_to=grad_to,
+            )
         return guide_fn
 
     def get_scheduler(self, schedule_fn):
@@ -281,6 +313,176 @@ class FlowPolicy(nn.Module):
         # TODO: Add more "guidance" methods, including sample and selection-based MPC
         actions = actions[0, 0] # simply get the first action in the first sample in the batch
         
+        return actions, trajectories
+
+    ### Stein Particle Steering ###
+
+    def _repeat_conditions_for_particles(self, conditions, batch_size, num_particles):
+        target_batch = batch_size * num_particles
+        repeated_conditions = {}
+        for t, val in conditions.items():
+            if val.dim() == 1:
+                repeated_conditions[t] = val.unsqueeze(0).repeat(target_batch, 1)
+            elif val.shape[0] == target_batch:
+                repeated_conditions[t] = val
+            elif val.shape[0] == batch_size:
+                repeated_conditions[t] = val.repeat_interleave(num_particles, dim=0)
+            elif val.shape[0] == 1:
+                repeats = [target_batch] + [1] * (val.dim() - 1)
+                repeated_conditions[t] = val.repeat(*repeats)
+            else:
+                raise ValueError(
+                    f"Condition batch {val.shape[0]} does not match batch_size={batch_size} "
+                    f"or batch_size * stein_particles={target_batch}."
+                )
+        return repeated_conditions
+
+    def _rbf_stein_vector_field(self, particles, score, batch_size, num_particles, eps=1e-8):
+        """
+        Compute an RBF SVGD field independently for each environment batch.
+
+        Args:
+            particles: Tensor, shape (batch_size * num_particles, T, C)
+            score: Tensor, shape (batch_size * num_particles, T, C)
+        """
+        if num_particles == 1:
+            return score
+
+        if particles.shape[0] != batch_size * num_particles:
+            raise ValueError("Particle batch does not match batch_size * num_particles.")
+
+        horizon = particles.shape[1]
+        dim = particles.shape[2]
+        particles_grouped = particles.view(batch_size, num_particles, horizon, dim)
+        score_grouped = score.view(batch_size, num_particles, horizon, dim)
+        out_grouped = torch.zeros_like(score_grouped)
+
+        for group_idx in range(batch_size):
+            x = particles_grouped[group_idx].reshape(num_particles, -1)
+            s = score_grouped[group_idx].reshape(num_particles, -1)
+
+            dist2 = torch.cdist(x, x) ** 2
+            positive_dist2 = dist2[dist2 > 0]
+            if positive_dist2.numel() == 0:
+                h_bandwidth = torch.tensor(1.0, device=particles.device, dtype=particles.dtype)
+            else:
+                h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
+                h_bandwidth = torch.clamp(h_bandwidth, min=eps)
+
+            kernel = torch.exp(-dist2 / h_bandwidth)
+            attraction = (kernel.t() @ s) / float(num_particles)
+
+            weighted_sum = kernel.t() @ x
+            kernel_sum = kernel.sum(dim=0, keepdim=True).t()
+            repulsion = (2.0 / h_bandwidth) * (weighted_sum - x * kernel_sum) / float(num_particles)
+
+            out_grouped[group_idx] = (attraction + repulsion).view(num_particles, horizon, dim)
+
+        return out_grouped.view(batch_size * num_particles, horizon, dim)
+
+    def _as_device_tensor(self, x):
+        if isinstance(x, torch.Tensor):
+            return x.to(self.cfg.device)
+        return torch.tensor(x, device=self.cfg.device)
+
+    def stein_forward(self, conditions, batch_size=1):
+        """
+        Use grouped RBF Stein steering over trajectory particles.
+        """
+        assert self.cfg.guidance_method == 'stein', f"guidance_method must be stein, but got {self.cfg.guidance_method}"
+        assert self.value_model is not None, "value_model is required for Stein steering"
+        if self.cfg.stein_particles < 1:
+            raise ValueError("stein_particles must be >= 1")
+        if self.cfg.stein_loop < 0:
+            raise ValueError("stein_loop must be >= 0")
+        if self.cfg.stein_step < 0:
+            raise ValueError("stein_step must be >= 0")
+        if self.cfg.stein_kernel != 'rbf':
+            raise ValueError(f"Unsupported stein_kernel: {self.cfg.stein_kernel}. Only 'rbf' is supported.")
+
+        num_particles = self.cfg.stein_particles
+        total_batch = batch_size * num_particles
+        schedule_fn = self.get_scheduler(self.cfg.grad_schedule)
+
+        conditions = utils.apply_dict(self.normalizer.normalize, conditions, 'observations')
+        conditions = to_torch(conditions, device=self.cfg.device)
+        conditions = self._repeat_conditions_for_particles(conditions, batch_size, num_particles)
+
+        x = torch.randn(total_batch, self.horizon, self.action_dim + self.state_dim, device=self.cfg.device)
+        x = apply_conditioning(x, conditions, self.action_dim)
+
+        t_span = torch.linspace(*self.cfg.ode_t_span, self.cfg.ode_t_steps, device=x.device)
+        assert len(t_span) > 1, "t_span must have at least 2 elements"
+        dt = t_span[1] - t_span[0]
+
+        for t in t_span:
+            grad_accumulator = torch.zeros_like(x, dtype=torch.float32)
+
+            for _ in range(self.cfg.stein_loop):
+                x = x.detach().requires_grad_()
+                dx_dt = self.flow_model(x, t)
+                score = self._compute_value_gradient(
+                    x=x,
+                    t=t,
+                    dx_dt=dx_dt,
+                    value_model=self.value_model,
+                    schedule_fn=schedule_fn,
+                    scale=self.cfg.grad_scale,
+                    grad_at=self.cfg.grad_compute_at,
+                    grad_to=self.cfg.grad_wrt,
+                )
+                stein_direction = self._rbf_stein_vector_field(
+                    particles=x.detach().float(),
+                    score=score.detach().float(),
+                    batch_size=batch_size,
+                    num_particles=num_particles,
+                )
+                stein_direction = torch.nan_to_num(stein_direction)
+
+                grad_accumulator = grad_accumulator + stein_direction * stein_direction
+                adaptive_step = self.cfg.stein_step / (
+                    torch.sqrt(grad_accumulator) + self.cfg.stein_adagrad_eps
+                )
+                if self.cfg.stein_adagrad_clip is not None:
+                    adaptive_step = adaptive_step.clamp(
+                        min=self.cfg.stein_adagrad_clip[0],
+                        max=self.cfg.stein_adagrad_clip[1],
+                    )
+
+                x = x.detach() + (adaptive_step * stein_direction).to(x.dtype)
+                x = apply_conditioning(x, conditions, self.action_dim)
+
+            x = x.detach()
+            with torch.no_grad():
+                dx_dt = self.flow_model(x, t)
+                dx_dt = apply_conditioning_from_conditioned_x(
+                    dx_dt, torch.zeros_like(x), conditions, self.action_dim
+                )
+                x = x + dx_dt * dt
+                x = apply_conditioning(x, conditions, self.action_dim)
+
+        normed_actions = x[:, :, :self.action_dim]
+        normed_observations = x[:, :, self.action_dim:]
+
+        actions = self._as_device_tensor(self.normalizer.unnormalize(normed_actions, 'actions'))
+        observations = self._as_device_tensor(self.normalizer.unnormalize(normed_observations, 'observations'))
+
+        values = self.value_model(torch.cat([normed_actions, normed_observations], dim=-1))[:, -1, 0]
+        values = values.reshape(batch_size, num_particles)
+        best_idx = values.argmax(dim=1)
+        batch_idx = torch.arange(batch_size, device=x.device)
+
+        best_values = values[batch_idx, best_idx]
+        best_observations = observations.reshape(batch_size, num_particles, self.horizon, self.state_dim)[
+            batch_idx, best_idx
+        ]
+        best_actions = actions.reshape(batch_size, num_particles, self.horizon, self.action_dim)[
+            batch_idx, best_idx
+        ]
+
+        trajectories = Trajectories(to_np(best_actions), to_np(best_observations), to_np(best_values))
+        actions = to_np(best_actions[0, 0])
+
         return actions, trajectories
     
 

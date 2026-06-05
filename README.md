@@ -93,9 +93,8 @@ Run directories contain generated images, `final_rewards.json`, and, when
 
 The `offline_rl/` folder contains the Guided Flow Planner (`gflower`) offline RL
 experiments adapted from the flow guidance baseline. These runs train flow
-matching trajectory models on D4RL locomotion tasks, train value/guidance models,
-and evaluate gradient, Monte Carlo, simulation Monte Carlo, and guidance-matching
-variants.
+matching trajectory models on D4RL locomotion tasks, train value models, and
+evaluate value-gradient guidance plus trajectory-particle Stein steering.
 
 #### Setup
 
@@ -143,9 +142,7 @@ Run these commands from inside `offline_rl/` after activating `gflower`:
 bash run_scripts/train.sh
 bash run_scripts/train_value.sh
 bash run_scripts/eval_gradient.sh
-bash run_scripts/eval_mc.sh
-bash run_scripts/eval_sim_mc.sh
-bash run_scripts/run_guidance_matching.sh
+bash run_scripts/eval_stein.sh
 ```
 
 Script roles:
@@ -153,10 +150,8 @@ Script roles:
 - `train.sh`: train CFM and OT-CFM base trajectory flow models.
 - `train_value.sh`: train the value model used by guided evaluation.
 - `eval_gradient.sh`: evaluate value-gradient guidance variants.
-- `eval_mc.sh`: evaluate Monte Carlo guidance.
-- `eval_sim_mc.sh`: evaluate simulation Monte Carlo guidance.
-- `run_guidance_matching.sh`: train and evaluate learned guidance matching
-  models.
+- `eval_stein.sh`: evaluate grouped RBF Stein steering over trajectory
+  particles, using the value-gradient direction as the target score.
 
 These scripts sweep over `halfcheetah`, `hopper`, and `walker2d` D4RL datasets.
 For quick smoke tests, reduce the loops in the shell scripts or run the

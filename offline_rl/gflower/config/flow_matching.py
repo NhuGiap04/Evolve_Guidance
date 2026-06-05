@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional, Tuple
 from gflower.config.value import TransformerConfig as ValueTransformerConfig
 
 @dataclass
@@ -82,7 +83,7 @@ class FlowMatchingEvaluationConfig:
     ode_t_span: tuple = (0, 1)
     ode_t_steps: int = 100
 
-    guidance_method: str = 'gradient' # no, ss, gradient, mc, guidance_matching
+    guidance_method: str = 'gradient' # no, gradient, stein
 
     # TODO: refactor
 
@@ -92,9 +93,17 @@ class FlowMatchingEvaluationConfig:
     # value gudiance: gradient
     grad_scale: float = 1.0
     grad_schedule: str = 'const'
-    grad_compute_at: str = 'x1' # 'x1', 'xt'
-    grad_wrt: str = 'x1' # 'x1', 'xt'
+    grad_compute_at: str = 'x_1' # 'x_1', 'x_t'; aliases 'x1', 'xt' are also accepted
+    grad_wrt: str = 'x_1' # 'x_1', 'x_t'; aliases 'x1', 'xt' are also accepted
     grad_precondition: str = 'none' # 'none', 'cov'
+
+    # value guidance: Stein particle steering
+    stein_particles: int = 8
+    stein_loop: int = 1
+    stein_step: float = 0.02
+    stein_kernel: str = 'rbf'
+    stein_adagrad_eps: float = 1e-8
+    stein_adagrad_clip: Optional[Tuple[float, float]] = None
 
     # MC approximate guidance
     mc_batch_size: int = 64 # how support samples to calculate gradient for one env
@@ -125,4 +134,3 @@ class FlowMatchingEvaluationConfig:
 
     sim_mc_eps: float = 1e-2
     sim_mc_self_normalize: bool = True
-    
