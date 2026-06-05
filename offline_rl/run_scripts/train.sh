@@ -1,4 +1,8 @@
 
+set -e
+
+export MPLBACKEND=${MPLBACKEND:-Agg}
+
 for flow_matching_type in cfm ot_cfm; do
     for env in halfcheetah hopper walker2d; do
         for horizon in 20; do

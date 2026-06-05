@@ -13,6 +13,7 @@ dependencies:
     - gym==0.23.1
     - mujoco_py==2.1.2.14
     - matplotlib==3.3.4
+    - matplotlib-inline==0.1.6
     - torch==1.9.1+cu111
     - git+https://github.com/Farama-Foundation/d4rl@f2a05c0d66722499bf8031b094d9af3aea7c372b#egg=d4rl
     - minari[hf]

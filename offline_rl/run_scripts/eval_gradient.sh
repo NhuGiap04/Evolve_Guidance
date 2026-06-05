@@ -1,3 +1,7 @@
+set -e
+
+export MPLBACKEND=${MPLBACKEND:-Agg}
+
 conda activate gflower
 
 for flow_matching_type in cfm ot_cfm; do

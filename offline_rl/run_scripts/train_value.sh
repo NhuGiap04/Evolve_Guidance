@@ -1,3 +1,7 @@
+set -e
+
+export MPLBACKEND=${MPLBACKEND:-Agg}
+
 conda activate gflower
 
 for env in halfcheetah hopper walker2d; do

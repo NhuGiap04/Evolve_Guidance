@@ -1,3 +1,7 @@
+set -e
+
+export MPLBACKEND=${MPLBACKEND:-Agg}
+
 conda activate gflower
 
 stein_particles=8
