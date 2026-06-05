@@ -34,7 +34,8 @@ for flow_matching_type in cfm ot_cfm; do
                     --batch_size 32 \
                     --learning_rate 2e-4 \
                     --ema_decay 0.995 \
-                    --flow_matching_type $flow_matching_type
+                    --flow_matching_type $flow_matching_type \
+                    "$@"
             done
         done
     done

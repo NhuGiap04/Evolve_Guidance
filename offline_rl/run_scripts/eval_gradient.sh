@@ -49,7 +49,8 @@ for flow_matching_type in cfm ot_cfm; do
                             --grad_compute_at $grad_at \
                             --grad_wrt $grad_to \
                             --grad_schedule $schedule \
-                            --grad_scale $scale
+                            --grad_scale $scale \
+                            "$@"
                         done
                     done
                 done

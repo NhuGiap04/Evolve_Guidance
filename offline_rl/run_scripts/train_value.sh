@@ -24,6 +24,7 @@ for env in halfcheetah hopper walker2d; do
             --n_train_steps 10001 \
             --save_freq 5000 \
             --batch_size 64 \
-            --learning_rate 2e-4 
+            --learning_rate 2e-4 \
+            "$@"
     done
 done

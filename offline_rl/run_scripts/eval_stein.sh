@@ -49,7 +49,8 @@ for flow_matching_type in cfm ot_cfm; do
                 --stein_particles $stein_particles \
                 --stein_loop $stein_loop \
                 --stein_step $stein_step \
-                --stein_kernel $stein_kernel
+                --stein_kernel $stein_kernel \
+                "$@"
             done
         done
     done
