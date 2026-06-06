@@ -2,7 +2,10 @@ set -e
 
 export MPLBACKEND=${MPLBACKEND:-Agg}
 
-conda activate gflower
+if [ "${CONDA_DEFAULT_ENV:-}" != "gflower" ]; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate gflower
+fi
 
 for env in halfcheetah hopper walker2d; do
     for dataset in "medium" "medium-replay" "medium-expert"; do
