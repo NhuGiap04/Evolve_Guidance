@@ -6,7 +6,7 @@ set -euo pipefail
 #   PYTHON_BIN=/venv/main/bin/python DEVICE=cuda:1 ./run_sd_batch_logged.sh
 #   PYTHON_BIN=/venv/main/bin/python DEVICES="cuda:0 cuda:1" ./run_sd_batch_logged.sh
 
-PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-/usr/local/envs/myenv/bin/python}"
 BATCH_SCRIPT="${BATCH_SCRIPT:-runs/gradient_sd_batch.py}"
 PROMPTS_FILE="${PROMPTS_FILE:-prompts/hps_v2_all_eval.txt}"
 OUTPUT_ROOT_DIR="${OUTPUT_DIR:-logs/sd_batch}"
