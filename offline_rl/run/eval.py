@@ -65,7 +65,7 @@ def evaluate(cfg: FlowMatchingEvaluationConfig):
         x_emb_proj_conv_k=cfg.transformer_config.x_emb_proj_conv_k,
     ).to(cfg.device)
     flow_transformer.load_state_dict(torch.load(os.path.join(
-        cfg.log_folder, cfg.env, 'flow', cfg.flow_exp_name, f'model_ema_{cfg.flow_cp}.pth'
+        cfg.log_folder, cfg.env, 'flow', cfg.flow_exp_name, f'model_{cfg.flow_cp}.pth'
     )))
 
     # get value model
