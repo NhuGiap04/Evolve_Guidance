@@ -9,13 +9,13 @@ fi
 
 grad_particles=8
 
-for flow_matching_type in cfm ot_cfm; do
-    for env in halfcheetah hopper walker2d; do
-        for dataset in medium-expert medium medium-replay; do
-            for grad_at in x_1 x_t; do
-                for grad_to in x_1 x_t; do
+for flow_matching_type in cfm ot_cfm; do                                    # cfm otcfm
+    for env in halfcheetah hopper walker2d; do                              # halfcheetah hopper walker2d
+        for dataset in medium-expert medium medium-replay; do               # medium-expert medium medium-replay
+            for grad_at in x_1 x_t; do                                      # x1 xt
+                for grad_to in x_1 x_t; do                                  # x1 xt
 
-                    if [ $grad_at == "x_t" ] && [ $grad_to == "x_1" ]; then
+                 if [ $grad_at == "x_t" ] && [ $grad_to == "x_1" ]; then
                         echo "Skipping x_t -> x_1"
                         continue
                     fi
@@ -37,8 +37,8 @@ for flow_matching_type in cfm ot_cfm; do
                         flow_prefix="ot_"
                     fi
 
-                    for schedule in cosine_decay const linear_decay exp_decay; do
-                        for scale in 0.0 0.01 0.1 1.0; do
+                    for schedule in cosine_decay const linear_decay exp_decay; do # cosine_delay const linear_decay exp_decay
+                        for scale in 0.0 0.01 0.1 1.0; do        # 0.0 0.01 0.1 1.0
                             python run/eval.py \
                             --device cuda:0 \
                             --seed 0 \
