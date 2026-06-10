@@ -6,17 +6,26 @@ from setuptools import setup
 ROOT = Path(__file__).resolve().parent
 
 
-def read_requirements():
-    requirements_path = ROOT / "requirements.txt"
-    if not requirements_path.exists():
-        return []
-
-    requirements = []
-    for line in requirements_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            requirements.append(line)
-    return requirements
+INSTALL_REQUIRES = [
+    "numba==0.60.0",
+    "numpy==2.0.0",
+    "scipy==1.14.0",
+    "matplotlib",
+    "ml-collections==0.1.1",
+    "absl-py==2.1.0",
+    "diffusers==0.32.2",
+    "accelerate==1.3.0",
+    "torch==2.3.1",
+    "torchvision==0.18.1",
+    "inflect==7.5.0",
+    "pydantic==2.10.6",
+    "transformers==4.48.2",
+    "timm==1.0.14",
+    "huggingface-hub==0.28.1",
+    "fairscale==0.4.13",
+    "clip",
+    "lpips",
+]
 
 
 def discover_packages():
@@ -45,7 +54,7 @@ setup(
             "prompts/*.txt",
         ],
     },
-    install_requires=read_requirements(),
+    install_requires=INSTALL_REQUIRES,
     python_requires=">=3.10",
     entry_points={
         "console_scripts": [

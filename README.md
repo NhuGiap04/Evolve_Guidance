@@ -19,16 +19,11 @@ setup notes in a separate section.
 ### Text-To-Image Stein Guidance
 
 #### Setup
-
-From the repository root:
-
 ```bash
-cd text2img
-pip install -r requirements.txt
-pip install --no-deps image-reward
+pip install -e ./text2img
 ```
 
-Optional reward models:
+Optional reward dependencies:
 
 - HPSv2: install from `https://github.com/tgxs002/HPSv2`
 - ImageReward: `pip install --no-deps image-reward`
@@ -44,7 +39,10 @@ Entry points:
 
 #### Running Experiments
 
+After installation, you can run the scripts from inside `text2img/`:
+
 ```bash
+cd text2img
 python runs/grad_sd.py
 python runs/grad_sdxl.py
 python runs/approx_sd.py
