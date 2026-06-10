@@ -63,10 +63,8 @@ Use `--prompts-file` for batch experiments.
 - `--batch-p`: reward micro-batch size over particles
 - `--stein-loop`: Stein updates per steered step
 - `--stein-step`: Stein update size
-- `--stein-kernel`: `rbf`; gradient runners also support `rbf-full`
-- `--steer-start`, `--steer-end`: 0-based steering window
-- `--monitor-status`: print per-step steering diagnostics
-- `--verbose`: save deferred reward traces
+- `--stein-kernel`: `rbf` or `imq`
+- `--start`, `--end`: 0-based steering window, with `end` exclusive; defaults are `0` and `--num-steps`
 - `--start-index`, `--max-prompts`: select a prompt slice in batch mode
 - `--stop-on-error`: stop batch execution on the first failed prompt
 - `--dry-run`: print planned runs without executing them
@@ -84,8 +82,7 @@ Batch runs write to:
 <output-dir>/batch_eval_summary.csv
 ```
 
-Run directories contain generated images, `final_rewards.json`, and, when
-`--verbose` is enabled, `steer_trace.csv` plus before/after reward plots.
+Run directories contain generated images and `final_rewards.json`.
 
 ### Offline RL Flow Guidance
 
@@ -165,22 +162,3 @@ Current utilities:
 - `discrete_diffusion/evaluation/compute_metrics.sh`: compute PPL, CoLA, diversity, and toxicity metrics for generated JSONL files.
 - `discrete_diffusion/evaluation/aggregate_over_seeds_mdlm.py`: aggregate metric files across seeds or repeated runs.
 - `discrete_diffusion/reward_functions.py`: reward/model scoring utilities.
-
-Suggested section pattern for new experiment families:
-
-```text
-### <Experiment Family>
-
-Goal:
-Entry points:
-Minimal command:
-Important arguments:
-Output layout:
-Evaluation:
-```
-
-## Notes
-
-- SD 1.5 defaults to `runwayml/stable-diffusion-v1-5` from `text2img/config/sd.py`.
-- SDXL defaults are defined in `text2img/config/sdxl.py`.
-- Keep new experiment families in separate folders and add one compact README section per family.

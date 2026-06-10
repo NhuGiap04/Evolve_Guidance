@@ -25,9 +25,8 @@ def _base_config():
     config.sample.prediction_model = "default"
     config.sample.predicted_samples = 1
     config.sample.lookahead_steps = 10
-    config.sample.steer_start = None
-    config.sample.steer_end = None
-    config.sample.monitor_status = False
+    config.sample.start = 0
+    config.sample.end = config.sample.num_steps
 
     config.pretrained.model = "runwayml/stable-diffusion-v1-5"
     config.pretrained.revision = "main"

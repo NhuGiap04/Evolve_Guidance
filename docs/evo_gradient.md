@@ -56,20 +56,19 @@ In `text2img/diffusers_patch/pipeline_using_gradient_SDXL.py`, keep existing Ste
 - `stein_step: float = 0.05` (base learning rate)
 - `stein_adagrad_eps: float = 1e-8`
 - `stein_adagrad_clip: Optional[Tuple[float, float]] = None` (optional min/max clamp for adaptive step)
-- `steer_start: Optional[int] = None`
-- `steer_end: Optional[int] = None`
+- `start: int = 0`
+- `end: Optional[int] = None`
 - `reward_scale_mode: str = "das"` (use DAS-consistent scaling by default)
 
 Default steering behavior:
 
-- If `steer_start is None`: use first scheduler timestep (`T`).
-- If `steer_end is None`: use last scheduler timestep (`0`-side).
-- Effective steering interval on descending timesteps: `steer_end <= t <= steer_start`.
+- `start` defaults to the first inference-step index.
+- `end` defaults to the number of inference steps and is exclusive.
+- Effective steering interval: `start <= step_index < end`.
 
 Validation:
 
-- Ensure `steer_start >= steer_end` for descending schedules.
-- Ensure both boundaries exist in or are clamped to scheduler timestep range.
+- Ensure `0 <= start <= end <= num_inference_steps`.
 
 ## 3.2 Config Surface
 
@@ -79,8 +78,8 @@ Expose in config (via `text2img/config/general.py` and preset overrides):
 - `sample.stein_loop`
 - `sample.stein_step`
 - `sample.stein_adagrad_eps`
-- `sample.steer_start`
-- `sample.steer_end`
+- `sample.start`
+- `sample.end`
 
 Pass through in runner callsites (`text2img/runs/grad_sdxl.py`, `text2img/runs/grad_sd.py`) when invoking pipeline.
 
@@ -183,14 +182,13 @@ Stability controls:
 
 ```python
 timesteps = scheduler.timesteps  # descending
-steer_start_eff = timesteps[0] if steer_start is None else steer_start
-steer_end_eff = timesteps[-1] if steer_end is None else steer_end
+end = len(timesteps) if end is None else end
 
 latents = init_latents(batch_size * num_particles)
 
-for t in timesteps:
+for step_index, t in enumerate(timesteps):
 	 noise_pred_pre = predict_noise(latents, t)
-	 is_steered = (steer_end_eff <= int(t) <= steer_start_eff)
+	 is_steered = start <= step_index < end
 
 	 if is_steered:
 		  G = torch.zeros_like(latents)
@@ -227,9 +225,9 @@ for t in timesteps:
 1. `text2img/diffusers_patch/pipeline_using_gradient_SDXL.py` and `text2img/diffusers_patch/pipeline_using_gradient_SD.py`
 	- Implement full particle-aware Stein loop in denoising steps.
 	- Remove any remaining SMC bookkeeping assumptions.
-	- Add steering range argument handling (`steer_start`, `steer_end`).
+	- Add steering range argument handling (`start`, `end`).
 	- Implement manifold-preserving proposal update.
-	- Return optional traces (rewards, step norms, particle latents) for debugging.
+	- Return final particles and rewards.
 
 2. `text2img/runs/grad_sdxl.py` and `text2img/runs/grad_sd.py`
 	- Pass sampling arguments from config to pipeline call.
@@ -246,10 +244,10 @@ for t in timesteps:
 
 Functional checks:
 
-1. `steer_start=None, steer_end=None` applies steering across full trajectory.
-2. `steer_start=t_mid, steer_end=t_low` only steers in that band.
+1. `start=0, end=num_inference_steps` applies steering across the full trajectory.
+2. `start=t_mid, end=t_late` only steers in that step-index band.
 3. `num_particles=1` reduces to single-particle guided trajectory and does not crash.
-4. No SMC traces/weights are produced or required.
+4. No SMC weights are produced or required.
 
 Numerical checks:
 
@@ -259,7 +257,7 @@ Numerical checks:
 
 Quality checks:
 
-1. Compare reward traces against baseline DDIM and old DAS-SMC.
+1. Compare final rewards against baseline DDIM and old DAS-SMC.
 2. Inspect diversity collapse risk as `stein_loop`/`stein_step` increase.
 3. Monitor manifold drift by latent norm and decode quality.
 
@@ -269,8 +267,8 @@ Quality checks:
 - `stein_loop = 2`
 - `stein_step = 0.02`
 - `stein_adagrad_eps = 1e-8`
-- `steer_start = None` (defaults to `T`)
-- `steer_end = None` (defaults to `0`)
+- `start = 0`
+- `end = num_inference_steps`
 
 Then tune in this order:
 

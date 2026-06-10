@@ -16,7 +16,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from diffusers import DDIMScheduler, DiffusionPipeline
@@ -24,106 +23,45 @@ from diffusers import DDIMScheduler, DiffusionPipeline
 from text2img.config.sdxl import get_config
 from text2img.diffusers_patch.pipeline_using_approx_SDXL import pipeline_using_approx_sdxl
 from text2img.rewards import FINAL_REWARD_SCORERS, build_final_reward_scorers, build_reward_scorer
+from text2img.runs.common import (
+    APPROX_SAMPLE_FIELDS,
+    APPROX_SINGLE_ARG_FIELDS,
+    apply_config_overrides,
+    pipeline_config_payload,
+    single_prompt_args,
+)
 
 
 def parse_single_args():
     parser = argparse.ArgumentParser(
-        description="Detailed SDXL approximate Stein-guided sampling with per-step reward traces and plots."
+        description="Run SDXL approximate Stein sampling."
     )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="pick",
-        choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
-        help="Config preset name from text2img/config/sdxl.py.",
-    )
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default="A close up of a handpalm with leaves growing from it.",
-        help="Prompt used for sampling.",
-    )
-    parser.add_argument(
-        "--negative-prompt",
-        type=str,
-        default="",
-        help="Negative prompt used during CFG guidance.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="logs/sdxl_approx",
-        help="Directory for generated images, traces, and plots.",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device to run on, e.g. cuda or cpu.",
-    )
+    parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"], help="Reward preset.")
+    parser.add_argument("--prompt", type=str, default="A close up of a handpalm with leaves growing from it.", help="Prompt.")
+    parser.add_argument("--negative-prompt", type=str, default="", help="Negative prompt.")
+    parser.add_argument("--output-dir", type=str, default="logs/sdxl_approx", help="Output directory.")
+    parser.add_argument("--device", type=str, default="cuda", help="Device.")
 
-    parser.add_argument("--seed", type=int, default=None, help="Optional random seed override.")
-    parser.add_argument("--num-steps", type=int, default=None, help="Optional num inference steps override.")
-    parser.add_argument("--batch-size", type=int, default=None, help="Optional batch size override.")
-    parser.add_argument("--guidance-scale", type=float, default=None, help="Optional CFG scale override.")
-    parser.add_argument("--eta", type=float, default=None, help="Optional DDIM eta override.")
+    parser.add_argument("--seed", type=int, default=None, help="Seed.")
+    parser.add_argument("--num-steps", type=int, default=None, help="Inference steps.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size.")
+    parser.add_argument("--guidance-scale", type=float, default=None, help="CFG scale.")
+    parser.add_argument("--eta", type=float, default=None, help="DDIM eta.")
 
-    parser.add_argument("--num-particles", type=int, default=None, help="Optional number of particles override.")
-    parser.add_argument("--batch-p", type=int, default=None, help="Optional reward evaluation micro-batch particle count.")
-    parser.add_argument("--stein-step", type=float, default=None, help="Optional Stein base step size override.")
-    parser.add_argument("--stein-loop", type=int, default=None, help="Optional number of Stein inner loops override.")
-    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"], help="Stein kernel.")
-    parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="Optional AdaGrad epsilon override.")
-    parser.add_argument("--kl-coeff", type=float, default=None, help="Optional reward scaling denominator override.")
-    parser.add_argument(
-        "--soft-temperature",
-        type=float,
-        default=None,
-        help="Optional fixed soft-good softmax temperature. Defaults to adaptive max(std, 1).",
-    )
-    parser.add_argument(
-        "--prediction-model",
-        type=str,
-        default=None,
-        choices=["default", "dpm", "lcm", "dmd"],
-        help="Model used to predict clean x0 samples for approximate guidance.",
-    )
-    parser.add_argument(
-        "--predicted-samples",
-        type=int,
-        default=None,
-        help="Number of predicted clean x0 samples per particle.",
-    )
-    parser.add_argument(
-        "--lookahead-steps",
-        dest="lookahead_steps",
-        type=int,
-        default=None,
-        help="Number of internal clean-prediction lookahead steps.",
-    )
-    parser.add_argument(
-        "--monitor-status",
-        action="store_true",
-        help="Print relative and absolute latent changes caused by each steered Stein step.",
-    )
-    parser.add_argument(
-        "--steer-start",
-        type=int,
-        default=None,
-        help="Steering start inference-step index (0-based, default: 0).",
-    )
-    parser.add_argument(
-        "--steer-end",
-        type=int,
-        default=None,
-        help="Steering end inference-step index (0-based, default: last step).",
-    )
+    parser.add_argument("--num-particles", type=int, default=4, help="Particles per prompt.")
+    parser.add_argument("--batch-p", type=int, default=None, help="Reward micro-batch size.")
+    parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
+    parser.add_argument("--stein-loop", type=int, default=1, help="Stein updates per step.")
+    parser.add_argument("--stein-kernel", type=str, default="rbf", choices=["rbf", "imq"], help="Stein kernel.")
+    parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="AdaGrad epsilon.")
+    parser.add_argument("--kl-coeff", type=float, default=None, help="Reward scale denominator.")
+    parser.add_argument("--soft-temperature", type=float, default=None, help="Softmax temperature.")
+    parser.add_argument("--prediction-model", type=str, default=None, choices=["default", "dpm", "lcm", "dmd"], help="Clean prediction backend.")
+    parser.add_argument("--predicted-samples", type=int, default=None, help="Clean samples per particle.")
+    parser.add_argument("--lookahead-steps", dest="lookahead_steps", type=int, default=None, help="Lookahead steps.")
+    parser.add_argument("--start", type=int, default=0, help="First steered step.")
+    parser.add_argument("--end", type=int, default=None, help="Exclusive steered step.")
 
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Decode and save deferred reward traces.",
-    )
 
     return parser.parse_args()
 
@@ -165,19 +103,6 @@ def save_tensor_image(image_tensor, path):
     Image.fromarray(image_hwc.numpy()).save(path)
 
 
-def save_before_after_plot(step_ids, pre_values, post_values, title, ylabel, out_path):
-    plt.figure(figsize=(10, 5))
-    plt.plot(step_ids, pre_values, label="before_steer", linewidth=2)
-    plt.plot(step_ids, post_values, label="after_steer", linewidth=2)
-    plt.xlabel("Steered step")
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
-
 
 def _expand_prompts_for_particles(prompts, num_particles):
     expanded = []
@@ -185,33 +110,6 @@ def _expand_prompts_for_particles(prompts, num_particles):
         expanded.extend([prompt] * num_particles)
     return expanded
 
-
-def _score_latents_in_batches(
-    pipe,
-    latents_cpu,
-    prompts,
-    steer_scorer,
-    batch_size,
-    device,
-    inference_dtype,
-):
-    steer_chunks = []
-
-    for offset in range(0, latents_cpu.shape[0], batch_size):
-        chunk_cpu = latents_cpu[offset : offset + batch_size]
-        with torch.inference_mode():
-            chunk_latents = chunk_cpu.to(device=device, dtype=inference_dtype)
-            chunk_images = decode_latents_sdxl(pipe, chunk_latents)
-            chunk_prompts = prompts[offset : offset + chunk_images.shape[0]]
-            chunk_steer = steer_scorer(chunk_images, chunk_prompts).detach().float().cpu()
-            steer_chunks.append(chunk_steer)
-
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-    if steer_chunks:
-        return torch.cat(steer_chunks, dim=0)
-    return torch.empty(0, dtype=torch.float32)
 
 
 def _score_stats(scores: torch.Tensor):
@@ -236,46 +134,7 @@ def release_generation_modules(pipe):
 
 
 def run_single_prompt(args):
-    config = get_config(args.config)
-    if args.seed is not None:
-        config.seed = args.seed
-    if args.num_steps is not None:
-        config.sample.num_steps = args.num_steps
-    if args.batch_size is not None:
-        config.sample.batch_size = args.batch_size
-    if args.guidance_scale is not None:
-        config.sample.guidance_scale = args.guidance_scale
-    if args.eta is not None:
-        config.sample.eta = args.eta
-
-    if args.num_particles is not None:
-        config.sample.num_particles = args.num_particles
-    if args.batch_p is not None:
-        config.sample.batch_p = args.batch_p
-    if args.stein_step is not None:
-        config.sample.stein_step = args.stein_step
-    if args.stein_loop is not None:
-        config.sample.stein_loop = args.stein_loop
-    if args.stein_kernel is not None:
-        config.sample.stein_kernel = args.stein_kernel
-    if args.stein_adagrad_eps is not None:
-        config.sample.stein_adagrad_eps = args.stein_adagrad_eps
-    if args.kl_coeff is not None:
-        config.sample.kl_coeff = args.kl_coeff
-    if args.soft_temperature is not None:
-        config.sample.soft_temperature = args.soft_temperature
-    if args.prediction_model is not None:
-        config.sample.prediction_model = args.prediction_model
-    if args.predicted_samples is not None:
-        config.sample.predicted_samples = args.predicted_samples
-    if args.lookahead_steps is not None:
-        config.sample.lookahead_steps = args.lookahead_steps
-    if args.monitor_status:
-        config.sample.monitor_status = True
-    if args.steer_start is not None:
-        config.sample.steer_start = args.steer_start
-    if args.steer_end is not None:
-        config.sample.steer_end = args.steer_end
+    config = apply_config_overrides(get_config(args.config), args, APPROX_SAMPLE_FIELDS)
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -329,25 +188,6 @@ def run_single_prompt(args):
         dtype=inference_dtype,
     )
 
-    trace_entries = []
-    trace_storage_dtype = torch.float16 if inference_dtype == torch.float16 else torch.float32
-
-    def collect_step_latents(_pipe, step_idx, timestep, callback_kwargs):
-        if args.verbose:
-            pre_x0 = callback_kwargs.get("pre_stein_pred_x0")
-            post_x0 = callback_kwargs.get("post_stein_pred_x0")
-            if pre_x0 is not None and post_x0 is not None:
-                t_value = int(timestep.item()) if torch.is_tensor(timestep) else int(timestep)
-                trace_entries.append(
-                    {
-                        "step_index": int(step_idx),
-                        "timestep": t_value,
-                        "pre_x0_latents_cpu": pre_x0.detach().to("cpu", dtype=trace_storage_dtype),
-                        "post_x0_latents_cpu": post_x0.detach().to("cpu", dtype=trace_storage_dtype),
-                    }
-                )
-        return callback_kwargs
-
     call_kwargs = dict(
         prompt=prompts,
         negative_prompt=args.negative_prompt,
@@ -369,10 +209,8 @@ def run_single_prompt(args):
         prediction_model=config.sample.prediction_model,
         predicted_samples=config.sample.predicted_samples,
         lookahead_steps=config.sample.lookahead_steps,
-        steer_start=config.sample.steer_start,
-        steer_end=config.sample.steer_end,
-        verbose=args.verbose,
-        monitor_status=config.sample.monitor_status,
+        start=config.sample.start,
+        end=config.sample.end,
         return_all_particles=True,
         return_dict=False,
     )
@@ -382,9 +220,6 @@ def run_single_prompt(args):
     inference_elapsed = time.time() - inference_start
 
     final_latents = result[0] if isinstance(result, (tuple, list)) else result
-    intermediate_rewards = None
-    if args.verbose and isinstance(result, (tuple, list)) and len(result) > 1:
-        intermediate_rewards = result[1]
     with torch.no_grad():
         final_images = decode_latents_sdxl(pipe, final_latents.to(device=device, dtype=inference_dtype))
 
@@ -425,119 +260,6 @@ def run_single_prompt(args):
 
     with (out_dir / "final_rewards.json").open("w", encoding="utf-8") as f:
         json.dump(final_rewards_payload, f, indent=2)
-
-    if args.verbose:
-        trace_rows = []
-        pre_steer_mean = []
-        post_steer_mean = []
-        pre_steer_max = []
-        post_steer_max = []
-
-        if intermediate_rewards is not None:
-            reward_keys = [
-                "step_indices",
-                "timesteps",
-                "pre_steer_mean",
-                "post_steer_mean",
-                "pre_steer_max",
-                "post_steer_max",
-            ]
-            trace_len = min(len(intermediate_rewards.get(key, [])) for key in reward_keys)
-            for idx in range(trace_len):
-                row = {
-                    "step_index": int(intermediate_rewards["step_indices"][idx]),
-                    "timestep": int(intermediate_rewards["timesteps"][idx]),
-                    "pre_steer_mean": float(intermediate_rewards["pre_steer_mean"][idx]),
-                    "post_steer_mean": float(intermediate_rewards["post_steer_mean"][idx]),
-                    "pre_steer_max": float(intermediate_rewards["pre_steer_max"][idx]),
-                    "post_steer_max": float(intermediate_rewards["post_steer_max"][idx]),
-                }
-                trace_rows.append(row)
-                pre_steer_mean.append(row["pre_steer_mean"])
-                post_steer_mean.append(row["post_steer_mean"])
-                pre_steer_max.append(row["pre_steer_max"])
-                post_steer_max.append(row["post_steer_max"])
-        else:
-            for trace in trace_entries:
-                trace_prompts = prompt_particles[: trace["pre_x0_latents_cpu"].shape[0]]
-                if len(trace_prompts) != trace["pre_x0_latents_cpu"].shape[0]:
-                    trace_prompts = [args.prompt] * trace["pre_x0_latents_cpu"].shape[0]
-
-                pre_steer_scores = _score_latents_in_batches(
-                    pipe=pipe,
-                    latents_cpu=trace["pre_x0_latents_cpu"],
-                    prompts=trace_prompts,
-                    steer_scorer=steer_scorer,
-                    batch_size=max(1, int(config.sample.num_particles)),
-                    device=device,
-                    inference_dtype=inference_dtype,
-                )
-                post_steer_scores = _score_latents_in_batches(
-                    pipe=pipe,
-                    latents_cpu=trace["post_x0_latents_cpu"],
-                    prompts=trace_prompts,
-                    steer_scorer=steer_scorer,
-                    batch_size=max(1, int(config.sample.num_particles)),
-                    device=device,
-                    inference_dtype=inference_dtype,
-                )
-
-                row = {
-                    "step_index": int(trace["step_index"]),
-                    "timestep": int(trace["timestep"]),
-                    "pre_steer_mean": float(pre_steer_scores.mean().item()),
-                    "post_steer_mean": float(post_steer_scores.mean().item()),
-                    "pre_steer_max": float(pre_steer_scores.max().item()),
-                    "post_steer_max": float(post_steer_scores.max().item()),
-                }
-                trace_rows.append(row)
-                pre_steer_mean.append(row["pre_steer_mean"])
-                post_steer_mean.append(row["post_steer_mean"])
-                pre_steer_max.append(row["pre_steer_max"])
-                post_steer_max.append(row["post_steer_max"])
-
-        for row in trace_rows:
-            print(
-                f"[steer step {row['step_index']:03d} | t={row['timestep']:04d}] "
-                f"mean: {row['pre_steer_mean']:.6f} -> {row['post_steer_mean']:.6f} "
-                f"(delta={row['post_steer_mean'] - row['pre_steer_mean']:+.6f}) | "
-                f"max: {row['pre_steer_max']:.6f} -> {row['post_steer_max']:.6f} "
-                f"(delta={row['post_steer_max'] - row['pre_steer_max']:+.6f})"
-            )
-
-        trace_csv_path = out_dir / "steer_trace.csv"
-        with trace_csv_path.open("w", encoding="utf-8", newline="") as trace_file:
-            fieldnames = [
-                "step_index",
-                "timestep",
-                "pre_steer_mean",
-                "post_steer_mean",
-                "pre_steer_max",
-                "post_steer_max",
-            ]
-            writer = csv.DictWriter(trace_file, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in trace_rows:
-                writer.writerow(row)
-
-        if len(trace_rows) > 0:
-            plot_x = list(range(1, len(trace_rows) + 1))
-            save_before_after_plot(
-                plot_x,
-                pre_steer_mean,
-                post_steer_mean,
-                title=f"Before/After steering reward ({config.reward_fn}) - mean",
-                ylabel="Reward",
-                out_path=out_dir / "steer_before_after_mean.png",
-            )
-            save_before_after_plot(
-                plot_x,
-                pre_steer_max,
-                post_steer_max,
-                title=f"Before/After steering reward ({config.reward_fn}) - max",
-                ylabel="Reward",
-                out_path=out_dir / "steer_before_after_max.png",
-            )
 
     print("Saved outputs to:", out_dir)
     print(f"Inference time (pipeline only): {inference_elapsed:.4f}s")
@@ -662,34 +384,7 @@ def load_prompts(file_path: Path) -> List[str]:
 
 
 def _build_single_prompt_args(args: argparse.Namespace, prompt: str, run_output_dir: Path) -> argparse.Namespace:
-    values = {
-        "prompt": prompt,
-        "output_dir": str(run_output_dir),
-        "config": args.config,
-        "negative_prompt": args.negative_prompt,
-        "device": args.device,
-        "seed": args.seed,
-        "num_steps": args.num_steps,
-        "batch_size": args.batch_size,
-        "guidance_scale": args.guidance_scale,
-        "eta": args.eta,
-        "num_particles": args.num_particles,
-        "batch_p": args.batch_p,
-        "stein_step": args.stein_step,
-        "stein_loop": args.stein_loop,
-        "stein_kernel": args.stein_kernel,
-        "stein_adagrad_eps": args.stein_adagrad_eps,
-        "kl_coeff": args.kl_coeff,
-        "monitor_status": args.monitor_status,
-        "steer_start": args.steer_start,
-        "steer_end": args.steer_end,
-        "verbose": args.verbose,
-        "soft_temperature": args.soft_temperature,
-        "prediction_model": args.prediction_model,
-        "predicted_samples": args.predicted_samples,
-        "lookahead_steps": args.lookahead_steps,
-    }
-    return argparse.Namespace(**values)
+    return single_prompt_args(args, prompt, run_output_dir, APPROX_SINGLE_ARG_FIELDS)
 
 
 def _single_prompt_call_description(single_args: argparse.Namespace) -> str:
@@ -748,19 +443,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run approx_sdxl.py over one prompt or prompts from a .txt/.json file.",
     )
-    parser.add_argument("--prompts-file", type=Path, default=None, help="Path to .txt or .json prompts file.")
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default="A close up of a handpalm with leaves growing from it.",
-        help="Prompt used when --prompts-file is omitted.",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="pick",
-        choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"],
-    )
+    parser.add_argument("--prompts-file", type=Path, default=None, help="Prompt file.")
+    parser.add_argument("--prompt", type=str, default="A close up of a handpalm with leaves growing from it.", help="Prompt for single-run mode.")
+    parser.add_argument("--config", type=str, default="pick", choices=["pick", "clip", "image_reward", "aesthetic", "hpsv2"])
     parser.add_argument("--negative-prompt", type=str, default="")
     parser.add_argument("--output-dir", type=Path, default=Path("logs/sdxl_approx_batch"))
     parser.add_argument("--device", type=str, default="cuda")
@@ -771,33 +456,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--guidance-scale", type=float, default=None)
     parser.add_argument("--eta", type=float, default=None)
 
-    parser.add_argument("--num-particles", type=int, default=None)
+    parser.add_argument("--num-particles", type=int, default=4, help="Particles per prompt.")
     parser.add_argument("--batch-p", type=int, default=None)
-    parser.add_argument("--stein-step", type=float, default=None)
-    parser.add_argument("--stein-loop", type=int, default=None)
-    parser.add_argument("--stein-kernel", type=str, default=None, choices=["rbf"])
+    parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
+    parser.add_argument("--stein-loop", type=int, default=2, help="Stein updates per step.")
+    parser.add_argument("--stein-kernel", type=str, default="rbf", choices=["rbf", "imq"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--soft-temperature", type=float, default=None)
     parser.add_argument("--prediction-model", type=str, default=None, choices=["default", "dpm", "lcm", "dmd"])
     parser.add_argument("--predicted-samples", type=int, default=None)
-    parser.add_argument("--lookahead-steps", "--dpm-lookahead-steps", dest="lookahead_steps", type=int, default=None)
-    parser.add_argument("--monitor-status", action="store_true")
-    parser.add_argument("--steer-start", type=int, default=None)
-    parser.add_argument("--steer-end", type=int, default=None)
+    parser.add_argument("--lookahead-steps", dest="lookahead_steps", type=int, default=None)
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--end", type=int, default=None)
 
-    parser.add_argument("--verbose", action="store_true")
 
-    parser.add_argument("--start-index", type=int, default=0, help="Start from this 0-based prompt index.")
-    parser.add_argument("--max-prompts", type=int, default=None, help="Limit number of prompts to run.")
+    parser.add_argument("--start-index", type=int, default=0, help="First prompt index.")
+    parser.add_argument("--max-prompts", type=int, default=None, help="Prompt limit.")
     parser.add_argument("--stop-on-error", action="store_true", help="Stop batch on first failed prompt.")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing.")
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=None,
-        help="Where to save per-run stdout/stderr logs (default: <output-dir>/_batch_logs).",
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Print planned runs.")
+    parser.add_argument("--log-dir", type=Path, default=None, help="Run log directory.")
 
     return parser.parse_args()
 
@@ -926,146 +604,15 @@ def _reward_log_line(reward_stats: Dict[str, str]) -> str:
     return "  rewards: " + " ".join(parts)
 
 
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    return value
-
-
 def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
-    # Prefer the source-of-truth config module when available.
-    try:
-        from text2img.config.sdxl import get_config as get_sdxl_config  # type: ignore
-
-        config = get_sdxl_config(args.config)
-        if args.seed is not None:
-            config.seed = args.seed
-        if args.num_steps is not None:
-            config.sample.num_steps = args.num_steps
-        if args.batch_size is not None:
-            config.sample.batch_size = args.batch_size
-        if args.guidance_scale is not None:
-            config.sample.guidance_scale = args.guidance_scale
-        if args.eta is not None:
-            config.sample.eta = args.eta
-        if args.num_particles is not None:
-            config.sample.num_particles = args.num_particles
-        if args.batch_p is not None:
-            config.sample.batch_p = args.batch_p
-        if args.stein_step is not None:
-            config.sample.stein_step = args.stein_step
-        if args.stein_loop is not None:
-            config.sample.stein_loop = args.stein_loop
-        if args.stein_kernel is not None:
-            config.sample.stein_kernel = args.stein_kernel
-        if args.stein_adagrad_eps is not None:
-            config.sample.stein_adagrad_eps = args.stein_adagrad_eps
-        if args.kl_coeff is not None:
-            config.sample.kl_coeff = args.kl_coeff
-        if args.soft_temperature is not None:
-            config.sample.soft_temperature = args.soft_temperature
-        if args.prediction_model is not None:
-            config.sample.prediction_model = args.prediction_model
-        if args.predicted_samples is not None:
-            config.sample.predicted_samples = args.predicted_samples
-        if args.lookahead_steps is not None:
-            config.sample.lookahead_steps = args.lookahead_steps
-        if args.monitor_status:
-            config.sample.monitor_status = True
-        if args.steer_start is not None:
-            config.sample.steer_start = args.steer_start
-        if args.steer_end is not None:
-            config.sample.steer_end = args.steer_end
-
-        model = str(config.pretrained.model)
-        model_revision = str(getattr(config.pretrained, "revision", ""))
-        reward_fn = str(config.reward_fn)
-        seed = int(config.seed)
-        sample = _json_safe(config.sample.to_dict())
-    except Exception:
-        # Fallback for environments without config dependencies.
-        model = "stabilityai/stable-diffusion-xl-base-1.0"
-        model_revision = ""
-        reward_fn = args.config
-        seed = int(args.seed) if args.seed is not None else 42
-        sample = {
-            "num_steps": 100,
-            "eta": 1.0,
-            "guidance_scale": 5.0,
-            "batch_size": 1,
-            "num_particles": 4,
-            "batch_p": 1,
-            "stein_step": 0.02,
-            "stein_loop": 2,
-            "stein_kernel": "rbf",
-            "stein_adagrad_eps": 1e-8,
-            "stein_adagrad_clip": None,
-            "kl_coeff": 0.0001,
-            "soft_temperature": None,
-            "steer_start": None,
-            "steer_end": None,
-            "monitor_status": False,
-            "prediction_model": "default",
-            "predicted_samples": 1,
-            "lookahead_steps": 10,
-        }
-        if args.num_steps is not None:
-            sample["num_steps"] = args.num_steps
-        if args.batch_size is not None:
-            sample["batch_size"] = args.batch_size
-        if args.guidance_scale is not None:
-            sample["guidance_scale"] = args.guidance_scale
-        if args.eta is not None:
-            sample["eta"] = args.eta
-        if args.num_particles is not None:
-            sample["num_particles"] = args.num_particles
-        if args.batch_p is not None:
-            sample["batch_p"] = args.batch_p
-        if args.stein_step is not None:
-            sample["stein_step"] = args.stein_step
-        if args.stein_loop is not None:
-            sample["stein_loop"] = args.stein_loop
-        if args.stein_kernel is not None:
-            sample["stein_kernel"] = args.stein_kernel
-        if args.stein_adagrad_eps is not None:
-            sample["stein_adagrad_eps"] = args.stein_adagrad_eps
-        if args.kl_coeff is not None:
-            sample["kl_coeff"] = args.kl_coeff
-        if args.soft_temperature is not None:
-            sample["soft_temperature"] = args.soft_temperature
-        if args.prediction_model is not None:
-            sample["prediction_model"] = args.prediction_model
-        if args.predicted_samples is not None:
-            sample["predicted_samples"] = args.predicted_samples
-        if args.lookahead_steps is not None:
-            sample["lookahead_steps"] = args.lookahead_steps
-        if args.monitor_status:
-            sample["monitor_status"] = True
-        if args.steer_start is not None:
-            sample["steer_start"] = args.steer_start
-        if args.steer_end is not None:
-            sample["steer_end"] = args.steer_end
-
-    payload = {
-        "runner": "approx_sdxl_batch",
-        "created_at_unix": float(time.time()),
-        "pipeline_type": "sdxl",
-        "pipeline_script": str(Path(__file__)),
-        "config_name": args.config,
-        "model": model,
-        "model_revision": model_revision,
-        "reward_fn": reward_fn,
-        "seed": seed,
-        "device": args.device,
-        "negative_prompt": args.negative_prompt,
-        "sample": _json_safe(sample),
-        "batch_args": {k: _json_safe(v) for k, v in vars(args).items()},
-    }
-    return payload
+    config = apply_config_overrides(get_config(args.config), args, APPROX_SAMPLE_FIELDS)
+    return pipeline_config_payload(
+        args=args,
+        config=config,
+        runner="approx_sdxl_batch",
+        pipeline_type="sdxl",
+        script_path=Path(__file__),
+    )
 
 
 def main() -> int:

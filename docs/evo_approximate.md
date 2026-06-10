@@ -189,7 +189,7 @@ Recommended anchor sources:
 - DPM-style fast solver from $x_t$ to an $x_0$ prediction.
 - LCM / consistency model prediction from $x_t$.
 - DMD or another distilled one/few-step sampler.
-- The base model's $\hat x_{0|t}$ prediction as a fallback when no fast auxiliary model is available.
+- The base model's $\hat x_{0|t}$ prediction for the default clean estimate.
 
 For each current particle $x_t^{(j)}$, produce one or more anchors
 
@@ -301,6 +301,6 @@ The correction uses $\bar x_{0|t}$ from the Stein-refined latent, while the nois
 - `stein_loop (M) = 1`
 - `stein_step = 0.002` to `0.005`
 - `stein_adagrad_eps = 1e-8`
-- `stein_kernel = "rbf"` (default)
+- `stein_kernel = "rbf"` or `"imq"` (`"rbf"` default)
 - `alpha = kl_coeff`
-- `prediction_model = "dpm"` when available; fallback to base $\hat x_{0|t}$ with `prediction_model = "default"`
+- `prediction_model = "dpm"` for the fast solver, or `prediction_model = "default"` for the base $\hat x_{0|t}$ estimate

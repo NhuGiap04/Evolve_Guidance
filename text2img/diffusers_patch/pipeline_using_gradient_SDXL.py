@@ -109,16 +109,19 @@ def _decode_latents_for_reward(pipe: StableDiffusionXLPipeline, latents: torch.T
     return image
 
 
-def _rbf_stein_vector_field(
+def _stein_vector_field(
     latents: torch.Tensor,
     score: torch.Tensor,
     base_sample_count: int,
     num_particles: int,
+    kernel: str,
     eps: float = 1e-8,
 ) -> torch.Tensor:
-    # Compute Stein direction per prompt group so particles from different prompts do not interact.
+    # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
     if num_particles == 1:
         return score
+    if kernel not in {"rbf", "imq"}:
+        raise ValueError("stein_kernel must be one of: rbf, imq.")
 
     b, c, h, w = latents.shape
     if b != base_sample_count * num_particles:
@@ -133,88 +136,29 @@ def _rbf_stein_vector_field(
         s = score_grouped[group_idx].reshape(num_particles, -1)
 
         dist2 = torch.cdist(x, x) ** 2
-        positive_dist2 = dist2[dist2 > 0]
-        if positive_dist2.numel() == 0:
-            h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
+        if kernel == "rbf":
+            positive_dist2 = dist2[dist2 > 0]
+            if positive_dist2.numel() == 0:
+                h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
+            else:
+                h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
+                h_bandwidth = torch.clamp(h_bandwidth, min=eps)
+            kernel_matrix = torch.exp(-dist2 / h_bandwidth)
+            grad_weight = (2.0 / h_bandwidth) * kernel_matrix
         else:
-            h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
-            h_bandwidth = torch.clamp(h_bandwidth, min=eps)
+            kernel_matrix = torch.rsqrt(1.0 + dist2)
+            grad_weight = torch.pow(1.0 + dist2, -1.5)
 
-        kernel = torch.exp(-dist2 / h_bandwidth)
-        attraction = (kernel.t() @ s) / float(num_particles)
-
-        weighted_sum = kernel.t() @ x
-        kernel_sum = kernel.sum(dim=0, keepdim=True).t()
-        repulsion = (2.0 / h_bandwidth) * (weighted_sum - x * kernel_sum) / float(num_particles)
+        attraction = (kernel_matrix.t() @ s) / float(num_particles)
+        weighted_sum = grad_weight.t() @ x
+        grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
+        repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
 
         phi = attraction + repulsion
         out_grouped[group_idx] = phi.view(num_particles, c, h, w)
 
     return out_grouped.view(b, c, h, w)
 
-
-def _rbf_full_stein_vector_field(
-    pipe: StableDiffusionXLPipeline,
-    latents: torch.Tensor,
-    noise_pred: torch.Tensor,
-    sqrt_alpha_bar_t: torch.Tensor,
-    sqrt_one_minus_alpha_bar_t: torch.Tensor,
-    score: torch.Tensor,
-    base_sample_count: int,
-    num_particles: int,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    # Compute k(f(x_i), f(x_j)) where f decodes the current x0 estimate.
-    if num_particles == 1:
-        return score
-
-    b, c, h, w = latents.shape
-    if b != base_sample_count * num_particles:
-        raise ValueError("Latent batch does not match base_sample_count * num_particles.")
-
-    out = torch.empty_like(score, dtype=torch.float32)
-    fixed_noise_pred = noise_pred.detach().to(device=latents.device, dtype=latents.dtype)
-    sqrt_alpha_bar_t = sqrt_alpha_bar_t.to(device=latents.device, dtype=latents.dtype)
-    sqrt_one_minus_alpha_bar_t = sqrt_one_minus_alpha_bar_t.to(device=latents.device, dtype=latents.dtype)
-    restore_vae_dtype = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
-
-    if restore_vae_dtype:
-        pipe.upcast_vae()
-
-    try:
-        for group_idx in range(base_sample_count):
-            start_idx = group_idx * num_particles
-            end_idx = start_idx + num_particles
-            latents_group = latents[start_idx:end_idx].detach().requires_grad_(True)
-            noise_group = fixed_noise_pred[start_idx:end_idx]
-
-            with torch.enable_grad():
-                pred_x0 = (latents_group - sqrt_one_minus_alpha_bar_t * noise_group) / sqrt_alpha_bar_t
-                f = _decode_latents_for_reward(pipe, pred_x0).flatten(1).float()
-                s = score[start_idx:end_idx].float().reshape(num_particles, -1)
-
-                dist2 = torch.cdist(f.detach(), f) ** 2
-                dist2_detached = dist2.detach()
-                positive_dist2 = dist2_detached[dist2_detached > 0]
-                if positive_dist2.numel() == 0:
-                    h_bandwidth = torch.tensor(1.0, device=f.device, dtype=f.dtype)
-                else:
-                    h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
-                    h_bandwidth = torch.clamp(h_bandwidth, min=eps)
-
-                kernel = torch.exp(-dist2 / h_bandwidth)
-                attraction = (kernel.detach().t() @ s).view(num_particles, c, h, w) / float(num_particles)
-
-                repulsion = torch.autograd.grad(kernel.sum() / float(num_particles), latents_group, allow_unused=True)[0]
-                if repulsion is None:
-                    repulsion = torch.zeros_like(latents_group)
-
-            out[start_idx:end_idx] = attraction + repulsion.detach().float()
-    finally:
-        if restore_vae_dtype:
-            pipe.vae.to(dtype=torch.float16)
-
-    return out.to(device=score.device, dtype=score.dtype)
 
 
 def _to_timestep_int(t: Union[int, torch.Tensor]) -> int:
@@ -260,7 +204,7 @@ def pipeline_using_gradient_sdxl(
     callback_on_step_end_tensor_inputs: List[str] = ["latents"],
     # Stein parameters
     num_particles: int = 4,
-    batch_p: int = 1, # number of particles to run parallely
+    batch_p: int = 1,
     reward_fn: Optional[Callable[[torch.Tensor, List[str]], torch.Tensor]] = None,
     stein_step: float = 0.05,
     stein_loop: int = 1,
@@ -268,10 +212,9 @@ def pipeline_using_gradient_sdxl(
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
-    steer_start: Optional[int] = None,
-    steer_end: Optional[int] = None,
+    start: int = 0,
+    end: Optional[int] = None,
     return_all_particles: bool = True,
-    verbose: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
     """Run SDXL denoising with optional Stein particle transport guidance."""
@@ -495,38 +438,13 @@ def pipeline_using_gradient_sdxl(
     prompt_particles = _expand_prompts_for_particles(prompt, base_sample_count, num_particles)
 
     total_inference_steps = len(timesteps)
+    start = int(start)
+    end = total_inference_steps if end is None else int(end)
+    if not 0 <= start <= end <= total_inference_steps:
+        raise ValueError(f"Expected 0 <= start <= end <= {total_inference_steps}, got start={start}, end={end}.")
 
-    if steer_start is None:
-        steer_start_effective = 0
-    else:
-        steer_start_effective = int(steer_start)
-
-    if steer_end is None:
-        steer_end_effective = total_inference_steps - 1
-    else:
-        steer_end_effective = int(steer_end)
-
-    # Support Python-style negative indexing for user convenience.
-    if steer_start_effective < 0:
-        steer_start_effective += total_inference_steps
-    if steer_end_effective < 0:
-        steer_end_effective += total_inference_steps
-
-    steer_start_effective = max(0, min(total_inference_steps - 1, steer_start_effective))
-    steer_end_effective = max(0, min(total_inference_steps - 1, steer_end_effective))
-
-    has_steering_window = steer_start_effective <= steer_end_effective
-    use_stein = has_steering_window and reward_fn is not None and stein_loop > 0 and stein_step > 0
+    use_stein = start < end and reward_fn is not None and stein_loop > 0 and stein_step > 0
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
-
-    intermediate_rewards_data: Dict[str, List[float]] = {
-        "step_indices": [],
-        "timesteps": [],
-        "pre_steer_mean": [],
-        "pre_steer_max": [],
-        "post_steer_mean": [],
-        "post_steer_max": [],
-    }
 
     def _slice_condition_tensor(
         condition: torch.Tensor,
@@ -688,7 +606,7 @@ def pipeline_using_gradient_sdxl(
 
             t_int = _to_timestep_int(t)
             noise_pred = _predict_noise(latents, t)
-            is_steered_step = use_stein and (steer_start_effective <= i <= steer_end_effective)
+            is_steered_step = use_stein and (start <= i < end)
 
             pre_stein_latents = None
             post_stein_latents = None
@@ -696,142 +614,35 @@ def pipeline_using_gradient_sdxl(
             post_stein_pred_x0 = None
 
             if is_steered_step:
-                latents_before_stein = None
-                if verbose or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
-                    latents_before_stein = latents.detach().clone()
-
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
-                    pre_stein_latents = latents_before_stein
-
-                pre_reward = None
-
-                if verbose:
-                    intermediate_rewards_data["step_indices"].append(float(i))
-                    intermediate_rewards_data["timesteps"].append(float(t_int))
+                    pre_stein_latents = latents.detach().clone()
 
                 grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
-                last_score_p_t = None
-                last_score_q_t = None
-                last_reward_grad = None
-
-                keep_vae_upcast = (
-                    stein_kernel == "rbf-full" and self.vae.dtype == torch.float16 and self.vae.config.force_upcast
-                )
-                if keep_vae_upcast:
-                    self.upcast_vae()
-
-                try:
-                    for loop_idx in range(stein_loop):
-                        noise_pred_for_score = _predict_noise(latents, t)
-                        pred_x0_for_score, sqrt_alpha_bar_t, sqrt_one_minus_alpha_bar_t = _predict_x0(
-                            latents, t_int, noise_pred_for_score
-                        )
-                        if loop_idx == 0:
-                            pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
-                        prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
-
-                        reward_values, reward_grad = _compute_reward_grad(
-                            latents,
-                            t,
-                            return_rewards=verbose and loop_idx == 0,
-                        )
-                        if verbose and loop_idx == 0 and reward_values is not None:
-                            pre_reward = reward_values
-
-                        score_p_t = prior_score.float()
-                        score_q = score_p_t + reward_grad.float()
-                        last_score_p_t = score_p_t
-                        last_score_q_t = score_q
-                        last_reward_grad = reward_grad
-
-                        if stein_kernel == "rbf":
-                            stein_direction = _rbf_stein_vector_field(
-                                latents=latents.float(),
-                                score=score_q,
-                                base_sample_count=base_sample_count,
-                                num_particles=num_particles,
-                            )
-                        elif stein_kernel == "rbf-full":
-                            stein_direction = _rbf_full_stein_vector_field(
-                                pipe=self,
-                                latents=latents,
-                                noise_pred=noise_pred_for_score,
-                                sqrt_alpha_bar_t=sqrt_alpha_bar_t,
-                                sqrt_one_minus_alpha_bar_t=sqrt_one_minus_alpha_bar_t,
-                                score=score_q,
-                                base_sample_count=base_sample_count,
-                                num_particles=num_particles,
-                            )
-                        else:
-                            raise ValueError(
-                                f"Unsupported stein_kernel: {stein_kernel}. Supported kernels: 'rbf', 'rbf-full'."
-                            )
-                        stein_direction = torch.nan_to_num(stein_direction)
-
-                        grad_accumulator = grad_accumulator + stein_direction * stein_direction
-                        adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
-                        if stein_adagrad_clip is not None:
-                            adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
-
-                        latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
-                finally:
-                    if keep_vae_upcast:
-                        self.vae.to(dtype=torch.float16)
-
-                if verbose and latents_before_stein is not None:
-                    delta = (latents - latents_before_stein).flatten(1).norm(dim=1)
-                    base = latents_before_stein.flatten(1).norm(dim=1)
-                    rel_delta = (delta / (base + 1e-8)).mean()
-                    before_flat = latents_before_stein.flatten(1).float()
-                    after_flat = latents.flatten(1).float()
-                    steered_cosine_sim = (
-                        (before_flat * after_flat).sum(dim=1)
-                        / (before_flat.norm(dim=1) * after_flat.norm(dim=1) + 1e-8)
-                    ).mean()
-                    score_pt_norm_mean = None
-                    target_score_norm_mean = None
-                    reward_grad_norm_mean = None
-                    if last_score_p_t is not None and last_reward_grad is not None:
-                        score_pt_norm = last_score_p_t.flatten(1).norm(dim=1)
-                        reward_grad_norm = last_reward_grad.float().flatten(1).norm(dim=1)
-                        score_pt_norm_mean = score_pt_norm.mean().item()
-                        reward_grad_norm_mean = reward_grad_norm.mean().item()
-                    if last_score_p_t is not None and last_score_q_t is not None:
-                        target_score_flat = last_score_q_t.flatten(1)
-                        target_score_norm = target_score_flat.norm(dim=1)
-                        target_score_norm_mean = target_score_norm.mean().item()
-
-                    def _fmt3(val: Optional[float]) -> str:
-                        return "None" if val is None else f"{val:.3f}"
-
-                    print(
-                        f"i={i} "
-                        f"t={t_int} "
-                        f"rel_delta={rel_delta.item():.3f} "
-                        f"abs_delta={delta.mean().item():.3f} "
-                        f"steered_cosine_sim={steered_cosine_sim.item():.3f} "
-                        f"score_pt_norm={_fmt3(score_pt_norm_mean)} "
-                        f"target_score_norm={_fmt3(target_score_norm_mean)} "
-                        f"reward_grad_norm={_fmt3(reward_grad_norm_mean)}"
+                for loop_idx in range(stein_loop):
+                    noise_pred_for_score = _predict_noise(latents, t)
+                    pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(
+                        latents, t_int, noise_pred_for_score
                     )
-
-                if verbose:
-                    if pre_reward is None:
-                        pre_reward = _compute_reward(latents, t)
-
-                    intermediate_rewards_data["pre_steer_mean"].append(float(pre_reward.mean().item()))
-                    intermediate_rewards_data["pre_steer_max"].append(float(pre_reward.max().item()))
-
-                    post_reward = _compute_reward(latents, t)
-                    intermediate_rewards_data["post_steer_mean"].append(float(post_reward.mean().item()))
-                    intermediate_rewards_data["post_steer_max"].append(float(post_reward.max().item()))
-
-                    print(
-                        f"[t={t_int:04d}] pre_mean={pre_reward.mean().item():.6f} "
-                        f"pre_max={pre_reward.max().item():.6f} "
-                        f"post_mean={post_reward.mean().item():.6f} "
-                        f"post_max={post_reward.max().item():.6f}"
+                    if loop_idx == 0:
+                        pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
+                    prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
+                    _, reward_grad = _compute_reward_grad(latents, t, return_rewards=False)
+                    score_q = prior_score.float() + reward_grad.float()
+                    stein_direction = _stein_vector_field(
+                        latents=latents.float(),
+                        score=score_q,
+                        base_sample_count=base_sample_count,
+                        num_particles=num_particles,
+                        kernel=stein_kernel,
                     )
+                    stein_direction = torch.nan_to_num(stein_direction)
+
+                    grad_accumulator = grad_accumulator + stein_direction * stein_direction
+                    adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
+                    if stein_adagrad_clip is not None:
+                        adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+
+                    latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
                     post_stein_latents = latents.detach().clone()
@@ -918,11 +729,6 @@ def pipeline_using_gradient_sdxl(
             base_idx = torch.arange(base_sample_count, device=latents.device)
             gather_idx = base_idx * num_particles + best_idx
             latents = latents[gather_idx]
-
-            if verbose:
-                intermediate_rewards_data["final_best_particle_reward"] = [
-                    float(v) for v in reward_grouped[base_idx, best_idx].detach().float().cpu().tolist()
-                ]
         else:
             latents = latents.view(base_sample_count, num_particles, *latents.shape[1:])[:, 0]
 
@@ -958,15 +764,6 @@ def pipeline_using_gradient_sdxl(
     self.maybe_free_model_hooks()
 
     if not return_dict:
-        if verbose:
-            return (image, intermediate_rewards_data)
         return (image,)
 
-    if verbose:
-        return {"images": image, "intermediate_rewards": intermediate_rewards_data}
-
     return StableDiffusionXLPipelineOutput(images=image)
-
-
-# Backward-compatible alias used in older callsites/docs.
-pipeline_using_stein_sdxl = pipeline_using_gradient_sdxl
