@@ -260,7 +260,6 @@ def pipeline_using_gradient_sd(
     steer_end: Optional[int] = None,
     return_all_particles: bool = True,
     verbose: bool = False,
-    monitor_status: bool = False,
     **kwargs,
 ) -> Union[StableDiffusionPipelineOutput, Tuple]:
     """Run SD denoising with optional Stein particle transport guidance."""
@@ -654,7 +653,7 @@ def pipeline_using_gradient_sd(
 
             if is_steered_step:
                 latents_before_stein = None
-                if monitor_status or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
+                if verbose or "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     latents_before_stein = latents.detach().clone()
 
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
@@ -696,7 +695,7 @@ def pipeline_using_gradient_sd(
                             pre_reward = reward_values
 
                         score_p_t = prior_score.float()
-                        score_q = score_p_t + reward_grad.float()
+                        score_q = reward_grad.float()
                         last_score_p_t = score_p_t
                         last_score_q_t = score_q
                         last_reward_grad = reward_grad
@@ -735,7 +734,7 @@ def pipeline_using_gradient_sd(
                     if keep_vae_upcast:
                         self.vae.to(dtype=torch.float16)
 
-                if monitor_status and latents_before_stein is not None:
+                if verbose and latents_before_stein is not None:
                     delta = (latents - latents_before_stein).flatten(1).norm(dim=1)
                     base = latents_before_stein.flatten(1).norm(dim=1)
                     rel_delta = (delta / (base + 1e-8)).mean()
