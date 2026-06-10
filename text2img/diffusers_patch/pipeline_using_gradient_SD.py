@@ -695,7 +695,7 @@ def pipeline_using_gradient_sd(
                             pre_reward = reward_values
 
                         score_p_t = prior_score.float()
-                        score_q = reward_grad.float()
+                        score_q = score_p_t + reward_grad.float()
                         last_score_p_t = score_p_t
                         last_score_q_t = score_q
                         last_reward_grad = reward_grad
