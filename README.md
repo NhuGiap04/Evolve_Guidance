@@ -11,8 +11,6 @@ setup notes in a separate section.
 - `text2img/`: text-to-image configs, runners, reward models, scorers, prompts, and patched diffusion pipelines.
 - `offline_rl/`: Guided Flow Planner experiments for D4RL locomotion tasks.
 - `discrete_diffusion/`: discrete diffusion migration workspace and evaluation tools.
-- `docs/`: design notes and implementation plans.
-- `logs/`: generated outputs, when created.
 
 ## Experiments
 
