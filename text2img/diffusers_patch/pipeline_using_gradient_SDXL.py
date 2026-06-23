@@ -120,8 +120,8 @@ def _stein_vector_field(
     # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
     if num_particles == 1:
         return score
-    if kernel not in {"rbf", "imq"}:
-        raise ValueError("stein_kernel must be one of: rbf, imq.")
+    if kernel not in {"rbf", "imq", "vmf"}:
+        raise ValueError("stein_kernel must be one of: rbf, imq, vmf.")
 
     b, c, h, w = latents.shape
     if b != base_sample_count * num_particles:
@@ -135,24 +135,37 @@ def _stein_vector_field(
         x = latents_grouped[group_idx].reshape(num_particles, -1)
         s = score_grouped[group_idx].reshape(num_particles, -1)
 
-        dist2 = torch.cdist(x, x) ** 2
-        if kernel == "rbf":
-            positive_dist2 = dist2[dist2 > 0]
-            if positive_dist2.numel() == 0:
-                h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
-            else:
-                h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
-                h_bandwidth = torch.clamp(h_bandwidth, min=eps)
-            kernel_matrix = torch.exp(-dist2 / h_bandwidth)
-            grad_weight = (2.0 / h_bandwidth) * kernel_matrix
-        else:
-            kernel_matrix = torch.rsqrt(1.0 + dist2)
-            grad_weight = torch.pow(1.0 + dist2, -1.5)
+        if kernel == "vmf":
+            kappa = 1.0
+            x_norm = x.norm(dim=1, keepdim=True).clamp_min(eps)
+            x_unit = x / x_norm
+            cosine = x_unit @ x_unit.t()
+            kernel_matrix = torch.exp(kappa * (cosine - 1.0))
 
-        attraction = (kernel_matrix.t() @ s) / float(num_particles)
-        weighted_sum = grad_weight.t() @ x
-        grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
-        repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
+            attraction = (kernel_matrix.t() @ s) / float(num_particles)
+            weighted_unit_sum = kernel_matrix.t() @ x_unit
+            weighted_cos_sum = (kernel_matrix * cosine).sum(dim=0, keepdim=True).t()
+            repulsion = kappa * (weighted_unit_sum - x_unit * weighted_cos_sum) / x_norm
+            repulsion = repulsion / float(num_particles)
+        else:
+            dist2 = torch.cdist(x, x) ** 2
+            if kernel == "rbf":
+                positive_dist2 = dist2[dist2 > 0]
+                if positive_dist2.numel() == 0:
+                    h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
+                else:
+                    h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
+                    h_bandwidth = torch.clamp(h_bandwidth, min=eps)
+                kernel_matrix = torch.exp(-dist2 / h_bandwidth)
+                grad_weight = (2.0 / h_bandwidth) * kernel_matrix
+            else:
+                kernel_matrix = torch.rsqrt(1.0 + dist2)
+                grad_weight = torch.pow(1.0 + dist2, -1.5)
+
+            attraction = (kernel_matrix.t() @ s) / float(num_particles)
+            weighted_sum = grad_weight.t() @ x
+            grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
+            repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
 
         phi = attraction + repulsion
         out_grouped[group_idx] = phi.view(num_particles, c, h, w)

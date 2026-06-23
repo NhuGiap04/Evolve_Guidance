@@ -1,7 +1,9 @@
 import argparse
+import math
+import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Sequence
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TextIO
 
 
 BASE_SAMPLE_FIELDS = (
@@ -96,3 +98,79 @@ def pipeline_config_payload(
         "sample": json_safe(config.sample.to_dict()),
         "batch_args": {k: json_safe(v) for k, v in vars(args).items()},
     }
+
+
+def build_average_csv_row(
+    rows: Sequence[Mapping[str, Any]],
+    fieldnames: Sequence[str],
+    *,
+    label: str = "avg",
+) -> Optional[Dict[str, str]]:
+    averages: Dict[str, str] = {field: "" for field in fieldnames}
+    if "index" in averages:
+        averages["index"] = label
+    elif "prompt" in averages:
+        averages["prompt"] = label
+
+    has_average = False
+    for field in fieldnames:
+        if field in {"index", "prompt", "status"}:
+            continue
+
+        values = []
+        for row in rows:
+            value = row.get(field, "")
+            if value in ("", None):
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric_value):
+                values.append(numeric_value)
+
+        if values:
+            averages[field] = f"{sum(values) / len(values):.6f}"
+            has_average = True
+
+    return averages if has_average else None
+
+
+def _truncate_progress_text(text: str, max_len: int) -> str:
+    text = " ".join(text.split())
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+class DenoisingProgress:
+    tensor_inputs: Sequence[str] = ()
+
+    def __init__(
+        self,
+        total_steps: int,
+        *,
+        prompt: str = "",
+        width: int = 28,
+        stream: Optional[TextIO] = None,
+    ) -> None:
+        self.total_steps = max(1, int(total_steps))
+        self.prompt = _truncate_progress_text(prompt, 56)
+        self.width = max(10, int(width))
+        self.stream = stream or sys.__stdout__
+        self.last_len = 0
+
+    def __call__(self, pipe: Any, step_index: int, timestep: Any, callback_kwargs: Dict[str, Any]) -> None:
+        del pipe, timestep, callback_kwargs
+        current = min(max(int(step_index) + 1, 0), self.total_steps)
+        fraction = current / self.total_steps
+        filled = min(self.width, int(round(self.width * fraction)))
+        bar = "#" * filled + "-" * (self.width - filled)
+        prompt_part = f"  prompt: {self.prompt}" if self.prompt else ""
+        line = f"  denoising [{bar}] {current:03d}/{self.total_steps:03d} {fraction * 100:5.1f}%{prompt_part}"
+        self.stream.write("\r" + line.ljust(self.last_len))
+        self.stream.flush()
+        self.last_len = len(line)
+        if current >= self.total_steps:
+            self.stream.write("\n")
+            self.stream.flush()

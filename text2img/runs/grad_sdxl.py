@@ -25,7 +25,9 @@ from text2img.diffusers_patch.pipeline_using_gradient_SDXL import pipeline_using
 from text2img.rewards import FINAL_REWARD_SCORERS, build_final_reward_scorers, build_reward_scorer
 from text2img.runs.common import (
     BASE_SINGLE_ARG_FIELDS,
+    DenoisingProgress,
     apply_config_overrides,
+    build_average_csv_row,
     pipeline_config_payload,
     single_prompt_args,
 )
@@ -51,7 +53,7 @@ def parse_single_args():
     parser.add_argument("--batch-p", type=int, default=None, help="Reward micro-batch size.")
     parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
     parser.add_argument("--stein-loop", type=int, default=1, help="Stein updates per step.")
-    parser.add_argument("--stein-kernel", type=str, default="rbf", choices=["rbf", "imq"], help="Stein kernel.")
+    parser.add_argument("--stein-kernel", "--kernel", dest="stein_kernel", type=str, default="rbf", choices=["rbf", "imq", "vmf"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None, help="AdaGrad epsilon.")
     parser.add_argument("--kl-coeff", type=float, default=None, help="Reward scale denominator.")
     parser.add_argument("--start", type=int, default=0, help="First steered step.")
@@ -147,6 +149,8 @@ def run_single_prompt(args):
     pipe = DiffusionPipeline.from_pretrained(config.pretrained.model, **load_kwargs).to(device)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(config.sample.num_steps)
+    if hasattr(pipe, "set_progress_bar_config"):
+        pipe.set_progress_bar_config(disable=True)
     pipe.enable_vae_slicing()
     pipe.enable_attention_slicing("max")
 
@@ -204,6 +208,8 @@ def run_single_prompt(args):
         end=config.sample.end,
         return_all_particles=True,
         return_dict=False,
+        callback_on_step_end=DenoisingProgress(config.sample.num_steps, prompt=args.prompt),
+        callback_on_step_end_tensor_inputs=[],
     )
     inference_start = time.time()
     with torch.no_grad():
@@ -254,13 +260,10 @@ def run_single_prompt(args):
 
     print("Saved outputs to:", out_dir)
     print(f"Inference time (pipeline only): {inference_elapsed:.4f}s")
-    print(
-        "Final steering reward stats: "
-        f"mean={final_steer_scores.mean().item():.6f} max={final_steer_scores.max().item():.6f}"
-    )
+    print("Final reward stats:")
     for scorer_name in FINAL_REWARD_SCORERS:
         stats = final_rewards_payload["final_particle_scores_by_scorer"][scorer_name]["stats"]
-        print(f"Final {scorer_name} stats: mean={stats['mean']:.6f} max={stats['max']:.6f}")
+        print(f"  {scorer_name:<12} mean={stats['mean']:.6f}  max={stats['max']:.6f}")
 
 
 def single_main() -> None:
@@ -451,7 +454,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-p", type=int, default=None)
     parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
     parser.add_argument("--stein-loop", type=int, default=2, help="Stein updates per step.")
-    parser.add_argument("--stein-kernel", type=str, default="rbf", choices=["rbf", "imq"], help="Stein kernel.")
+    parser.add_argument("--stein-kernel", "--kernel", dest="stein_kernel", type=str, default="rbf", choices=["rbf", "imq", "vmf"], help="Stein kernel.")
     parser.add_argument("--stein-adagrad-eps", type=float, default=None)
     parser.add_argument("--kl-coeff", type=float, default=None)
     parser.add_argument("--start", type=int, default=0)
@@ -474,7 +477,7 @@ def _to_metric_str(value: Any) -> str:
 
 
 def _blank_reward_stats() -> Dict[str, str]:
-    stats = {"steer_mean": "", "steer_max": ""}
+    stats = {}
     for scorer_name in FINAL_SCORERS:
         stats[f"{scorer_name}_mean"] = ""
         stats[f"{scorer_name}_max"] = ""
@@ -511,19 +514,24 @@ def _load_final_rewards_payload(run_output_dir: Path) -> Optional[Dict[str, Any]
 
 
 def _extract_reward_stats_from_stdout(stdout: str, stats: Dict[str, str]) -> None:
-    steer_match = re.search(
-        r"Final steering reward stats:\s*mean=([-+0-9.eE]+)\s+max=([-+0-9.eE]+)",
-        stdout,
-    )
-    if steer_match:
-        if not stats["steer_mean"]:
-            stats["steer_mean"] = _to_metric_str(float(steer_match.group(1)))
-        if not stats["steer_max"]:
-            stats["steer_max"] = _to_metric_str(float(steer_match.group(2)))
-
     for match in re.finditer(
         r"Final ([A-Za-z0-9_]+) stats:\s*mean=([-+0-9.eE]+)\s+max=([-+0-9.eE]+)",
         stdout,
+    ):
+        scorer_name = match.group(1)
+        if scorer_name not in FINAL_SCORERS:
+            continue
+        mean_key = f"{scorer_name}_mean"
+        max_key = f"{scorer_name}_max"
+        if not stats[mean_key]:
+            stats[mean_key] = _to_metric_str(float(match.group(2)))
+        if not stats[max_key]:
+            stats[max_key] = _to_metric_str(float(match.group(3)))
+
+    for match in re.finditer(
+        r"^\s*([A-Za-z0-9_]+)\s+mean=([-+0-9.eE]+)\s+max=([-+0-9.eE]+)",
+        stdout,
+        re.MULTILINE,
     ):
         scorer_name = match.group(1)
         if scorer_name not in FINAL_SCORERS:
@@ -543,10 +551,6 @@ def _extract_reward_stats(run_output_dir: Path, stdout: str = "") -> Dict[str, s
     if payload is None:
         _extract_reward_stats_from_stdout(stdout, stats)
         return stats
-
-    steer_stats = payload.get("steer_reward_stats", {})
-    stats["steer_mean"] = _to_metric_str(steer_stats.get("mean"))
-    stats["steer_max"] = _to_metric_str(steer_stats.get("max"))
 
     scorer_payload = payload.get("final_particle_scores_by_scorer", {})
     for scorer_name in FINAL_SCORERS:
@@ -572,8 +576,6 @@ def _build_eval_row(
         "index": str(global_idx),
         "prompt": prompt,
         "status": status,
-        "steer_mean": reward_stats["steer_mean"],
-        "steer_max": reward_stats["steer_max"],
     }
     for scorer_name in FINAL_SCORERS:
         row[f"{scorer_name}_mean"] = reward_stats[f"{scorer_name}_mean"]
@@ -582,13 +584,12 @@ def _build_eval_row(
 
 
 def _reward_log_line(reward_stats: Dict[str, str]) -> str:
-    parts = [
-        f"steer_mean={_fmt_reward_stat(reward_stats['steer_mean'])}",
-        f"steer_max={_fmt_reward_stat(reward_stats['steer_max'])}",
-    ]
+    parts = []
     for scorer_name in FINAL_SCORERS:
-        parts.append(f"{scorer_name}_mean={_fmt_reward_stat(reward_stats[f'{scorer_name}_mean'])}")
-    return "  rewards: " + " ".join(parts)
+        mean_value = _fmt_reward_stat(reward_stats[f"{scorer_name}_mean"])
+        max_value = _fmt_reward_stat(reward_stats[f"{scorer_name}_max"])
+        parts.append(f"{scorer_name}: mean={mean_value} max={max_value}")
+    return "  rewards: " + " | ".join(parts)
 
 
 def _resolve_pipeline_config(args: argparse.Namespace) -> Dict[str, Any]:
@@ -648,11 +649,12 @@ def main() -> int:
 
     rows: List[Dict[str, Any]] = []
     success_count = 0
-    csv_path = args.output_dir / "batch_eval_summary.csv"
-    csv_fieldnames = ["index", "prompt", "steer_mean", "steer_max"]
+    csv_path = args.output_dir / "results.csv"
+    csv_fieldnames = ["index", "prompt"]
     for scorer_name in FINAL_SCORERS:
         csv_fieldnames.extend([f"{scorer_name}_mean", f"{scorer_name}_max"])
     csv_fieldnames.append("status")
+    csv_rows: List[Dict[str, str]] = []
 
     batch_start = time.time()
     total_runs = len(selected_prompts)
@@ -687,6 +689,7 @@ def main() -> int:
                 reward_stats = _blank_reward_stats()
                 eval_row = _build_eval_row(global_idx, prompt, "DRY", reward_stats)
                 eval_writer.writerow(eval_row)
+                csv_rows.append(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
                 continue
@@ -724,6 +727,7 @@ def main() -> int:
                 )
                 eval_row = _build_eval_row(global_idx, prompt, "OK", reward_stats)
                 eval_writer.writerow(eval_row)
+                csv_rows.append(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
                 print(_c(f"  status: {status}  time: {elapsed:.2f}s", _Style.DIM))
@@ -740,6 +744,7 @@ def main() -> int:
                 )
                 eval_row = _build_eval_row(global_idx, prompt, "FAIL", reward_stats)
                 eval_writer.writerow(eval_row)
+                csv_rows.append(eval_row)
                 csv_file.flush()
                 os.fsync(csv_file.fileno())
                 print(_c(f"  status: {status}  time: {elapsed:.2f}s  code: {returncode}", _Style.DIM))
@@ -755,6 +760,12 @@ def main() -> int:
                     break
 
             print()
+
+        average_row = build_average_csv_row(csv_rows, csv_fieldnames)
+        if average_row is not None:
+            eval_writer.writerow(average_row)
+            csv_file.flush()
+            os.fsync(csv_file.fileno())
 
     total_elapsed = time.time() - batch_start
     _print_summary(rows)

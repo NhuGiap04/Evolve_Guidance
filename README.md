@@ -9,7 +9,7 @@ setup notes in a separate section.
 ## Repository Map
 
 - `text2img/`: text-to-image configs, runners, reward models, scorers, prompts, and patched diffusion pipelines.
-- `offline_rl/`: Guided Flow Planner experiments for D4RL locomotion tasks.
+- `locomotion/`: Guided Flow Planner experiments for D4RL locomotion tasks.
 - `discrete_diffusion/`: discrete diffusion migration workspace and evaluation tools.
 
 ## Experiments
@@ -32,8 +32,6 @@ Entry points:
 | --- | --- | --- |
 | `text2img/runs/grad_sd.py` | Stable Diffusion 1.5 | reward-gradient Stein |
 | `text2img/runs/grad_sdxl.py` | SDXL | reward-gradient Stein |
-| `text2img/runs/approx_sd.py` | Stable Diffusion 1.5 | approximate reward Stein |
-| `text2img/runs/approx_sdxl.py` | SDXL | approximate reward Stein |
 
 #### Running Experiments
 
@@ -43,8 +41,6 @@ After installation, you can run the scripts from inside `text2img/`:
 cd text2img
 python runs/grad_sd.py
 python runs/grad_sdxl.py
-python runs/approx_sd.py
-python runs/approx_sdxl.py
 ```
 
 Use `--prompts-file` for batch experiments.
@@ -61,14 +57,11 @@ Use `--prompts-file` for batch experiments.
 - `--batch-p`: reward micro-batch size over particles
 - `--stein-loop`: Stein updates per steered step
 - `--stein-step`: Stein update size
-- `--stein-kernel`: `rbf` or `imq`
+- `--stein-kernel`: `rbf`,`imq`, `vmf`
 - `--start`, `--end`: 0-based steering window, with `end` exclusive; defaults are `0` and `--num-steps`
 - `--start-index`, `--max-prompts`: select a prompt slice in batch mode
 - `--stop-on-error`: stop batch execution on the first failed prompt
 - `--dry-run`: print planned runs without executing them
-- `--prediction-model`: approx-only clean prediction backend
-- `--predicted-samples`: approx-only number of predicted clean samples per particle
-- `--lookahead-steps`: approx-only clean-prediction solver steps
 
 #### Outputs
 
@@ -77,7 +70,7 @@ Batch runs write to:
 ```text
 <output-dir>/run_<idx>_<prompt-slug>/<config>_seed<seed>/
 <output-dir>/_batch_logs/
-<output-dir>/batch_eval_summary.csv
+<output-dir>/results.csv
 ```
 
 Run directories contain generated images and `final_rewards.json`.
