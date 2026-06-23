@@ -212,4 +212,7 @@ __marimo__/
 # Jupyter
 *.ipynb
 
+# Note
+*.txt
+
 checkpoints/

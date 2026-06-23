@@ -82,20 +82,20 @@ Batch runs write to:
 
 Run directories contain generated images and `final_rewards.json`.
 
-### Offline RL Flow Guidance
+### Locomotion Flow Guidance
 
-The `offline_rl/` folder contains the Guided Flow Planner (`gflower`) offline RL
+The `locomotion/` folder contains the Guided Flow Planner (`gflower`) offline RL
 experiments adapted from the flow guidance baseline. These runs train flow
 matching trajectory models on D4RL locomotion tasks, train value models, and
 evaluate value-gradient guidance plus trajectory-particle Stein steering.
 
 #### Setup
 
-The offline RL stack uses older MuJoCo/D4RL dependencies. Change into the
-`offline_rl/` folder and create the pinned environment:
+The locomotion stack uses older MuJoCo/D4RL dependencies. Change into the
+`locomotion/` folder and create the pinned environment:
 
 ```bash
-cd offline_rl
+cd locomotion
 conda env create -f environment.yml
 conda activate gflower
 pip install -e .
@@ -129,7 +129,7 @@ training scripts first access them.
 
 #### Running Experiments
 
-Run these commands from inside `offline_rl/` after activating `gflower`:
+Run these commands from inside `locomotion/` after activating `gflower`:
 
 ```bash
 bash run_scripts/train.sh
