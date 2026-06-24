@@ -119,7 +119,7 @@ def _stein_vector_field(
 ) -> torch.Tensor:
     # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
     if num_particles == 1:
-        return score
+        return torch.zeros_like(score)
     if kernel not in {"rbf", "imq", "vmf"}:
         raise ValueError("stein_kernel must be one of: rbf, imq, vmf.")
 
@@ -141,8 +141,10 @@ def _stein_vector_field(
             x_unit = x / x_norm
             cosine = x_unit @ x_unit.t()
             kernel_matrix = torch.exp(kappa * (cosine - 1.0))
+            attraction_kernel = kernel_matrix.clone()
+            attraction_kernel.fill_diagonal_(0.0)
 
-            attraction = (kernel_matrix.t() @ s) / float(num_particles)
+            attraction = (attraction_kernel.t() @ s) / float(num_particles)
             weighted_unit_sum = kernel_matrix.t() @ x_unit
             weighted_cos_sum = (kernel_matrix * cosine).sum(dim=0, keepdim=True).t()
             repulsion = kappa * (weighted_unit_sum - x_unit * weighted_cos_sum) / x_norm
@@ -162,7 +164,10 @@ def _stein_vector_field(
                 kernel_matrix = torch.rsqrt(1.0 + dist2)
                 grad_weight = torch.pow(1.0 + dist2, -1.5)
 
-            attraction = (kernel_matrix.t() @ s) / float(num_particles)
+            attraction_kernel = kernel_matrix.clone()
+            attraction_kernel.fill_diagonal_(0.0)
+
+            attraction = (attraction_kernel.t() @ s) / float(num_particles)
             weighted_sum = grad_weight.t() @ x
             grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
             repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
@@ -571,6 +576,17 @@ def pipeline_using_gradient_sd(
         rewards_out = torch.cat(all_rewards, dim=0) if return_rewards else None
         return rewards_out, torch.cat(all_grads, dim=0)
 
+    def _adagrad_step(
+        direction: torch.Tensor,
+        accumulator: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        direction = torch.nan_to_num(direction.float())
+        accumulator = accumulator + direction * direction
+        adaptive_step = stein_step / (torch.sqrt(accumulator) + stein_adagrad_eps)
+        if stein_adagrad_clip is not None:
+            adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+        return adaptive_step * direction, accumulator
+
     # Stein loop
     self._num_timesteps = len(timesteps)
     with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -591,33 +607,35 @@ def pipeline_using_gradient_sd(
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents.detach().clone()
 
-                grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
+                reward_accumulator = torch.zeros_like(latents, dtype=torch.float32)
+                exploration_accumulator = torch.zeros_like(latents, dtype=torch.float32)
                 for loop_idx in range(stein_loop):
+                    # Stage 1: optimize each particle directly with the reward gradient.
                     noise_pred_for_score = _predict_noise(latents, t)
-                    pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(
-                        latents, t_int, noise_pred_for_score
-                    )
+                    pred_x0_for_score, _, _ = _predict_x0(latents, t_int, noise_pred_for_score)
                     if loop_idx == 0:
                         pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
-                    prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
                     _, reward_grad = _compute_reward_grad(latents, t, return_rewards=False)
-                    score_q = prior_score.float() + reward_grad.float()
-                    stein_direction = _stein_vector_field(
+                    reward_update, reward_accumulator = _adagrad_step(reward_grad, reward_accumulator)
+                    latents = latents + reward_update.to(latents.dtype)
+
+                    # Stage 2: explore with cross-particle pretrained scores and kernel repulsion.
+                    noise_pred_for_explore = _predict_noise(latents, t)
+                    _, _, sqrt_one_minus_alpha_bar_t = _predict_x0(latents, t_int, noise_pred_for_explore)
+                    prior_score = -noise_pred_for_explore / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
+                    exploration_direction = _stein_vector_field(
                         latents=latents.float(),
-                        score=score_q,
+                        score=prior_score.float(),
                         base_sample_count=base_sample_count,
                         num_particles=num_particles,
                         kernel=stein_kernel,
                         repulsion_strength=stein_repulsion,
                     )
-                    stein_direction = torch.nan_to_num(stein_direction)
-
-                    grad_accumulator = grad_accumulator + stein_direction * stein_direction
-                    adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
-                    if stein_adagrad_clip is not None:
-                        adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
-
-                    latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
+                    exploration_update, exploration_accumulator = _adagrad_step(
+                        exploration_direction,
+                        exploration_accumulator,
+                    )
+                    latents = latents + exploration_update.to(latents.dtype)
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
                     post_stein_latents = latents.detach().clone()
