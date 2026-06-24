@@ -16,15 +16,13 @@ def _base_config():
     config.sample.num_particles = 4
     config.sample.batch_p = 1
     config.sample.stein_step = 0.02
-    config.sample.stein_loop = 2
+    config.sample.stein_loop = 1
     config.sample.stein_kernel = "rbf"
+    config.sample.stein_repulsion = 1.0
     config.sample.stein_adagrad_eps = 1e-8
     config.sample.stein_adagrad_clip = None
     config.sample.kl_coeff = 0.0001
     config.sample.soft_temperature = None
-    config.sample.prediction_model = "default"
-    config.sample.predicted_samples = 1
-    config.sample.lookahead_steps = 10
     config.sample.start = 0
     config.sample.end = config.sample.num_steps
 

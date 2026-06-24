@@ -114,6 +114,7 @@ def _stein_vector_field(
     base_sample_count: int,
     num_particles: int,
     kernel: str,
+    repulsion_strength: float,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
@@ -166,7 +167,7 @@ def _stein_vector_field(
             grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
             repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
 
-        phi = attraction + repulsion
+        phi = attraction + repulsion_strength * repulsion
         out_grouped[group_idx] = phi.view(num_particles, c, h, w)
 
     return out_grouped.view(b, c, h, w)
@@ -210,6 +211,7 @@ def pipeline_using_gradient_sd(
     stein_step: float = 0.05,
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
+    stein_repulsion: float = 1.0,
     stein_adagrad_eps: float = 1e-8,
     stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
@@ -253,6 +255,8 @@ def pipeline_using_gradient_sd(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
+    if stein_repulsion < 0:
+        raise ValueError("stein_repulsion must be >= 0")
 
     check_params = inspect.signature(self.check_inputs).parameters
     check_kwargs: Dict[str, Any] = {
@@ -604,6 +608,7 @@ def pipeline_using_gradient_sd(
                         base_sample_count=base_sample_count,
                         num_particles=num_particles,
                         kernel=stein_kernel,
+                        repulsion_strength=stein_repulsion,
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 

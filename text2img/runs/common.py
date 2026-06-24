@@ -16,6 +16,7 @@ BASE_SAMPLE_FIELDS = (
     "stein_step",
     "stein_loop",
     "stein_kernel",
+    "stein_repulsion",
     "stein_adagrad_eps",
     "kl_coeff",
 )
