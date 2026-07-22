@@ -224,6 +224,7 @@ stein_particles = K = 8
 stein_loop = 1
 stein_step = eta = 0.02
 stein_kernel = rbf
+stein_repulsion = gamma = 1.0
 ode_t_steps = 10
 grad_scale in {0.01, 0.1, 1.0}
 grad_schedule in {cosine_decay, const, linear_decay, exp_decay}
@@ -271,12 +272,13 @@ The implemented Stein vector field for particle `j` is:
 ```math
 \phi_j
 = \frac{1}{K} \sum_{i=1}^K
-   \left[ k_{ij} q_i + \frac{2}{h} k_{ij} (z_i - z_j) \right].
+   \left[ k_{ij} q_i + \gamma \frac{2}{h} k_{ij} (z_i - z_j) \right].
 ```
 
 The first term transports particles along the value-gradient scores. The second
 term is the RBF kernel-gradient term as implemented in `_rbf_stein_vector_field`
-and named `repulsion` in code.
+and named `repulsion` in code. Its coefficient `gamma` is configured by
+`stein_repulsion`; setting it to zero disables particle repulsion.
 
 Inside each ODE time step, the Stein loop applies an AdaGrad-style update:
 

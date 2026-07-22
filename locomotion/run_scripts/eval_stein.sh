@@ -11,6 +11,7 @@ stein_particles=8
 stein_loop=1
 stein_step=0.02
 stein_kernel=rbf
+stein_repulsion=1.0
 
 for flow_matching_type in cfm ot_cfm; do                        # cfm otcfm
     for env in halfcheetah hopper walker2d; do                  # halfcheetah hopper walker2d
@@ -46,7 +47,7 @@ for flow_matching_type in cfm ot_cfm; do                        # cfm otcfm
                             --device cuda:0 \
                             --seed 0 \
                             --random_repeat 5 \
-                            --exp_name "$flow_prefix"H20_1e6steps_stein_10steps_inf_K"$stein_particles"_loop"$stein_loop"_step"$stein_step"_scale"$scale"_grad_at_"$grad_at"_grad_to_"$grad_to" \
+                            --exp_name "$flow_prefix"H20_1e6steps_stein_10steps_inf_K"$stein_particles"_loop"$stein_loop"_step"$stein_step"_repulsion"$stein_repulsion"_scale"$scale"_grad_at_"$grad_at"_grad_to_"$grad_to" \
                             --env $env-$dataset-v2 \
                             --state_dim $state_dim \
                             --action_dim $action_dim \
@@ -66,6 +67,7 @@ for flow_matching_type in cfm ot_cfm; do                        # cfm otcfm
                             --stein_loop $stein_loop \
                             --stein_step $stein_step \
                             --stein_kernel $stein_kernel \
+                            --stein_repulsion $stein_repulsion \
                             "$@"
                         done
                     done

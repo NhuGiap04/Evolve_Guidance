@@ -105,6 +105,7 @@ class FlowMatchingEvaluationConfig:
     stein_loop: int = 1
     stein_step: float = 0.02
     stein_kernel: str = 'rbf'
+    stein_repulsion: float = 1.0
     stein_adagrad_eps: float = 1e-8
     stein_adagrad_clip: Optional[Tuple[float, float]] = None
 

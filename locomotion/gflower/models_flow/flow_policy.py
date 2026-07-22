@@ -455,7 +455,15 @@ class FlowPolicy(nn.Module):
                 )
         return repeated_conditions
 
-    def _rbf_stein_vector_field(self, particles, score, batch_size, num_particles, eps=1e-8):
+    def _rbf_stein_vector_field(
+        self,
+        particles,
+        score,
+        batch_size,
+        num_particles,
+        repulsion_strength=1.0,
+        eps=1e-8,
+    ):
         """
         Compute an RBF SVGD field independently for each environment batch.
 
@@ -494,7 +502,9 @@ class FlowPolicy(nn.Module):
             kernel_sum = kernel.sum(dim=0, keepdim=True).t()
             repulsion = (2.0 / h_bandwidth) * (weighted_sum - x * kernel_sum) / float(num_particles)
 
-            out_grouped[group_idx] = (attraction + repulsion).view(num_particles, horizon, dim)
+            out_grouped[group_idx] = (
+                attraction + repulsion_strength * repulsion
+            ).view(num_particles, horizon, dim)
 
         return out_grouped.view(batch_size * num_particles, horizon, dim)
 
@@ -515,6 +525,8 @@ class FlowPolicy(nn.Module):
             raise ValueError("stein_loop must be >= 0")
         if self.cfg.stein_step < 0:
             raise ValueError("stein_step must be >= 0")
+        if self.cfg.stein_repulsion < 0:
+            raise ValueError("stein_repulsion must be >= 0")
         if self.cfg.stein_kernel != 'rbf':
             raise ValueError(f"Unsupported stein_kernel: {self.cfg.stein_kernel}. Only 'rbf' is supported.")
 
@@ -554,6 +566,7 @@ class FlowPolicy(nn.Module):
                     score=score.detach().float(),
                     batch_size=batch_size,
                     num_particles=num_particles,
+                    repulsion_strength=self.cfg.stein_repulsion,
                 )
                 stein_direction = torch.nan_to_num(stein_direction)
 
