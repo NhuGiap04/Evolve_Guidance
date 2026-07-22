@@ -128,6 +128,7 @@ Run these commands from inside `locomotion/` after activating `gflower`:
 ```bash
 bash run_scripts/train.sh
 bash run_scripts/train_value.sh
+bash run_scripts/eval_best_of_n.sh
 bash run_scripts/eval_gradient.sh
 bash run_scripts/eval_stein.sh
 ```
@@ -136,6 +137,8 @@ Script roles:
 
 - `train.sh`: train CFM and OT-CFM base trajectory flow models.
 - `train_value.sh`: train the value model used by guided evaluation.
+- `eval_best_of_n.sh`: sample N unguided trajectories and select the one with
+  the highest predicted terminal value.
 - `eval_gradient.sh`: evaluate value-gradient guidance variants.
 - `eval_stein.sh`: evaluate grouped RBF Stein steering over trajectory
   particles, using the value-gradient direction as the target score.

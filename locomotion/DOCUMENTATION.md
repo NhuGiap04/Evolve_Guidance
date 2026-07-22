@@ -4,8 +4,9 @@ This note documents the formulas used by:
 
 - `run_scripts/eval_gradient.sh`
 - `run_scripts/eval_stein.sh`
+- `run_scripts/eval_best_of_n.sh`
 
-Both scripts call `run/eval.py`, which builds a `FlowPolicy` from
+All three scripts call `run/eval.py`, which builds a `FlowPolicy` from
 `gflower/models_flow/flow_policy.py`. The trajectory tensor is normalized and
 has shape
 
@@ -142,6 +143,20 @@ g_t
    \left(I + (1-t) \frac{\partial v_\theta(x_t,t)}{\partial x_t}\right)^T
    \nabla_{\hat{x}_1} J_\phi(\hat{x}_1).
 ```
+
+## `eval_best_of_n.sh`: Best-of-N Selection
+
+For each environment observation, best-of-N draws `N` independent trajectory
+candidates from the unguided flow model. It evaluates their normalized action
+and observation sequences with the value model and selects by terminal value:
+
+```math
+j^* = \arg\max_{j \in \{1,\ldots,N\}} J_\phi(x_1^{(j)}).
+```
+
+The first action of candidate `j^*` is executed and the policy replans after the
+next observation. The run script sweeps `N` over `1, 4, 8, 16, 32, 64`; `N=1`
+is the unguided sampling baseline.
 
 ## `eval_gradient.sh`: Direct Value-Gradient Guidance
 

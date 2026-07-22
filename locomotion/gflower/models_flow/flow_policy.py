@@ -80,11 +80,17 @@ class FlowPolicy(nn.Module):
         self.value_model = value_model # we need this to return value
         self.guide_model = guide_model
 
+        self.flow_model.eval()
+        if self.value_model is not None:
+            self.value_model.eval()
+        if self.guide_model is not None:
+            self.guide_model.eval()
+
     def __call__(self, conditions, batch_size=1, verbose=True):
         # assert batch_size == 1, "batch_size must be 1 for now"
 
-        if self.cfg.guidance_method in ['ss']:
-            return self.ss_forward(conditions, batch_size)
+        if self.cfg.guidance_method in ['best_of_n', 'bon', 'ss']:
+            return self.best_of_n_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['gradient']:
             return self.gradient_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['stein']:
@@ -141,61 +147,80 @@ class FlowPolicy(nn.Module):
         return actions, trajectories
 
 
-    ### Sample and Selection MPC ###
+    ### Best-of-N MPC ###
 
-    def ss_forward(self, conditions, batch_size=1):
-        assert batch_size == 1, "batch_size must be 1 for now"
-        # Only normalize the observation
+    def best_of_n_forward(self, conditions, batch_size=1):
+        """Sample N unguided plans and execute the highest-value candidate."""
+        assert self.value_model is not None, "value_model is required for best-of-N"
+
+        num_candidates = self.cfg.best_of_n
+        if self.cfg.guidance_method == 'ss' and self.cfg.ss_batch is not None:
+            num_candidates = self.cfg.ss_batch
+        if num_candidates < 1:
+            raise ValueError("best_of_n must be >= 1")
+
         conditions = utils.apply_dict(self.normalizer.normalize, conditions, 'observations')
+        conditions = to_torch(conditions, device=self.cfg.device)
+        conditions = self._repeat_conditions_for_particles(
+            conditions, batch_size, num_candidates
+        )
 
-        # Generate actions
         solver = ConditionedODESolver(
-            self.flow_model, 
-            conditions, 
-            guide_fn=None, 
+            self.flow_model,
+            conditions,
+            guide_fn=None,
             ode_method=self.cfg.ode_solver,
             action_dim=self.action_dim,
         )
 
-
-        x = torch.randn(self.cfg.ss_batch * batch_size, self.horizon, self.action_dim + self.state_dim, device=self.cfg.device) # (B, T, C)
-        conditions = to_torch(conditions, device=x.device) # {'0': tensor (B, C)}
-        conditions = utils.apply_dict(lambda x: x.repeat(self.cfg.ss_batch, 1), conditions)
+        x = torch.randn(
+            batch_size * num_candidates,
+            self.horizon,
+            self.action_dim + self.state_dim,
+            device=self.cfg.device,
+        )
         x = apply_conditioning(x, conditions, self.action_dim)
-
-        x = solver(
-            x, 
-            t_span=torch.linspace(
-                *self.cfg.ode_t_span, self.cfg.ode_t_steps, device=x.device
-            ),
-        ) # (B_ss * B, T, C)
+        with torch.no_grad():
+            x = solver(
+                x,
+                t_span=torch.linspace(
+                    *self.cfg.ode_t_span, self.cfg.ode_t_steps, device=x.device
+                ),
+            )
 
         normed_actions = x[:, :, :self.action_dim]
-        actions = torch.tensor(self.normalizer.unnormalize(normed_actions, 'actions'), device=self.cfg.device)
-
         normed_observations = x[:, :, self.action_dim:]
-        observations = torch.tensor(self.normalizer.unnormalize(normed_observations, 'observations'), device=self.cfg.device)
+        actions = self._as_device_tensor(
+            self.normalizer.unnormalize(normed_actions, 'actions')
+        )
+        observations = self._as_device_tensor(
+            self.normalizer.unnormalize(normed_observations, 'observations')
+        )
 
-        values = self.value_model(torch.cat([normed_actions, normed_observations], dim=-1)) # (B_ss * B, T, 1)
-        values = values[:, -1, 0] # (B_ss * B)
-        values = values.reshape(self.cfg.ss_batch, batch_size) # (B_ss, B)
-        best_idx = values.argmax(dim=0).to(self.cfg.device) # (B,)
-        
-        # to construct trajectories
-        best_values = values[best_idx, torch.arange(batch_size, device=self.cfg.device)] # (B,)
-        best_values = best_values[0] # (1,), select the first sample in the batch
-        best_observations = observations.reshape(self.cfg.ss_batch, batch_size, self.horizon, self.state_dim)[best_idx, torch.arange(batch_size, device=self.cfg.device)] # (B, T, C)
-        best_observations = best_observations[0] # (T, C), select the first sample in the batch
-        best_actions = actions.reshape(self.cfg.ss_batch, batch_size, self.horizon, self.action_dim)[best_idx, torch.arange(batch_size, device=self.cfg.device)] # (B, T, C)
-        best_actions = best_actions[0] # (T, C), select the first sample in the batch
-        
-        trajectories = Trajectories(to_np(best_actions), to_np(best_observations), to_np(best_values))
+        with torch.no_grad():
+            values = self.value_model(
+                torch.cat([normed_actions, normed_observations], dim=-1)
+            )[:, -1, 0]
+        values = values.reshape(batch_size, num_candidates)
+        best_idx = values.argmax(dim=1)
+        batch_idx = torch.arange(batch_size, device=x.device)
 
-        # output actions
-        actions = actions.reshape(self.cfg.ss_batch, batch_size, self.horizon, self.action_dim)[best_idx, torch.arange(batch_size, device=self.cfg.device)] # (B, T, C)
-        actions = to_np(actions[0, 0]) # (C,), simply get the first action in the first sample in the batch
+        best_values = values[batch_idx, best_idx]
+        best_actions = actions.reshape(
+            batch_size, num_candidates, self.horizon, self.action_dim
+        )[batch_idx, best_idx]
+        best_observations = observations.reshape(
+            batch_size, num_candidates, self.horizon, self.state_dim
+        )[batch_idx, best_idx]
 
-        return actions, trajectories
+        trajectories = Trajectories(
+            to_np(best_actions), to_np(best_observations), to_np(best_values)
+        )
+        return to_np(best_actions[0, 0]), trajectories
+
+    # Backward-compatible entry point used by older code.
+    def ss_forward(self, conditions, batch_size=1):
+        return self.best_of_n_forward(conditions, batch_size)
 
 
     ### Taylor Expansion Approximate Gradient Guidance ###

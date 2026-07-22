@@ -83,12 +83,15 @@ class FlowMatchingEvaluationConfig:
     ode_t_span: tuple = (0, 1)
     ode_t_steps: int = 100
 
-    guidance_method: str = 'gradient' # no, gradient, stein
+    guidance_method: str = 'gradient' # no, best_of_n, gradient, stein
 
     # TODO: refactor
 
-    # sample and select
-    ss_batch: int = 64 # how many candidate plans to sample for one env
+    # best-of-N (sample candidate plans and select the highest-value one)
+    best_of_n: int = 64
+    # Deprecated compatibility option for guidance_method=ss. When set, this
+    # overrides best_of_n for old commands.
+    ss_batch: Optional[int] = None
 
     # value gudiance: gradient
     grad_scale: float = 1.0
