@@ -83,15 +83,15 @@ class FlowMatchingEvaluationConfig:
     ode_t_span: tuple = (0, 1)
     ode_t_steps: int = 100
 
-    guidance_method: str = 'gradient' # no, best_of_n, gradient, stein
+    guidance_method: str = 'gradient' # no, smc, gradient, stein
 
     # TODO: refactor
 
-    # best-of-N (sample candidate plans and select the highest-value one)
-    best_of_n: int = 64
-    # Deprecated compatibility option for guidance_method=ss. When set, this
-    # overrides best_of_n for old commands.
-    ss_batch: Optional[int] = None
+    # sequential Monte Carlo
+    smc_particles: int = 64
+    smc_scale: float = 0.01
+    smc_ess_threshold: float = 0.5
+    smc_resample_every: int = 1
 
     # value gudiance: gradient
     grad_scale: float = 1.0

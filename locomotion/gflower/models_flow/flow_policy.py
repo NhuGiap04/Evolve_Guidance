@@ -89,8 +89,8 @@ class FlowPolicy(nn.Module):
     def __call__(self, conditions, batch_size=1, verbose=True):
         # assert batch_size == 1, "batch_size must be 1 for now"
 
-        if self.cfg.guidance_method in ['best_of_n', 'bon', 'ss']:
-            return self.best_of_n_forward(conditions, batch_size)
+        if self.cfg.guidance_method == 'smc':
+            return self.smc_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['gradient']:
             return self.gradient_forward(conditions, batch_size)
         elif self.cfg.guidance_method in ['stein']:
@@ -147,80 +147,168 @@ class FlowPolicy(nn.Module):
         return actions, trajectories
 
 
-    ### Best-of-N MPC ###
+    ### Sequential Monte Carlo ###
 
-    def best_of_n_forward(self, conditions, batch_size=1):
-        """Sample N unguided plans and execute the highest-value candidate."""
-        assert self.value_model is not None, "value_model is required for best-of-N"
-
-        num_candidates = self.cfg.best_of_n
-        if self.cfg.guidance_method == 'ss' and self.cfg.ss_batch is not None:
-            num_candidates = self.cfg.ss_batch
-        if num_candidates < 1:
-            raise ValueError("best_of_n must be >= 1")
-
-        conditions = utils.apply_dict(self.normalizer.normalize, conditions, 'observations')
-        conditions = to_torch(conditions, device=self.cfg.device)
-        conditions = self._repeat_conditions_for_particles(
-            conditions, batch_size, num_candidates
+    def _systematic_resample(self, weights):
+        """Return systematic-resampling ancestors for weights shaped (B, N)."""
+        batch_size, num_particles = weights.shape
+        offsets = torch.rand(
+            batch_size, 1, device=weights.device, dtype=weights.dtype
+        ) / num_particles
+        positions = offsets + torch.arange(
+            num_particles, device=weights.device, dtype=weights.dtype
+        ).unsqueeze(0) / num_particles
+        cdf = weights.cumsum(dim=1)
+        cdf[:, -1] = 1.0
+        return torch.searchsorted(
+            cdf.contiguous(), positions.contiguous(), right=False
         )
 
-        solver = ConditionedODESolver(
-            self.flow_model,
-            conditions,
-            guide_fn=None,
-            ode_method=self.cfg.ode_solver,
-            action_dim=self.action_dim,
+    def _smc_endpoint_value(self, x, t, conditions, is_final):
+        """Score a first-order prediction of the completed trajectory."""
+        if not is_final:
+            dx_dt = self.flow_model(x, t)
+            x_eval = x + (1 - t) * dx_dt
+            x_eval = apply_conditioning(
+                x_eval,
+                conditions,
+                self.action_dim,
+            )
+        else:
+            x_eval = x
+        return self.value_model(x_eval)[:, -1, 0]
+
+    def smc_forward(self, conditions, batch_size=1):
+        """Annealed SMC using predicted terminal value as the target potential."""
+        assert self.cfg.guidance_method == 'smc'
+        assert self.value_model is not None, "value_model is required for SMC"
+        if self.cfg.smc_particles < 1:
+            raise ValueError("smc_particles must be >= 1")
+        if self.cfg.smc_scale < 0:
+            raise ValueError("smc_scale must be >= 0")
+        if not 0 < self.cfg.smc_ess_threshold <= 1:
+            raise ValueError("smc_ess_threshold must be in (0, 1]")
+        if self.cfg.smc_resample_every < 1:
+            raise ValueError("smc_resample_every must be >= 1")
+
+        num_particles = self.cfg.smc_particles
+        total_batch = batch_size * num_particles
+        conditions = utils.apply_dict(
+            self.normalizer.normalize, conditions, 'observations'
+        )
+        conditions = to_torch(conditions, device=self.cfg.device)
+        conditions = self._repeat_conditions_for_particles(
+            conditions, batch_size, num_particles
         )
 
         x = torch.randn(
-            batch_size * num_candidates,
+            total_batch,
             self.horizon,
             self.action_dim + self.state_dim,
             device=self.cfg.device,
         )
         x = apply_conditioning(x, conditions, self.action_dim)
+        t_span = torch.linspace(
+            *self.cfg.ode_t_span, self.cfg.ode_t_steps, device=x.device
+        )
+        if len(t_span) < 2:
+            raise ValueError("ode_t_steps must be >= 2 for SMC")
+        if t_span[-1] <= t_span[0]:
+            raise ValueError("ode_t_span must be increasing for SMC")
+
+        log_weights = torch.zeros(
+            batch_size, num_particles, device=x.device, dtype=x.dtype
+        )
+        previous_potential = torch.zeros_like(log_weights)
+        batch_idx = torch.arange(batch_size, device=x.device).unsqueeze(1)
+
         with torch.no_grad():
-            x = solver(
-                x,
-                t_span=torch.linspace(
-                    *self.cfg.ode_t_span, self.cfg.ode_t_steps, device=x.device
-                ),
-            )
+            for step_idx in range(len(t_span) - 1):
+                t = t_span[step_idx]
+                t_next = t_span[step_idx + 1]
+                dt = t_next - t
+
+                dx_dt = self.flow_model(x, t)
+                dx_dt = apply_conditioning_from_conditioned_x(
+                    dx_dt, torch.zeros_like(x), conditions, self.action_dim
+                )
+                x = apply_conditioning(
+                    x + dx_dt * dt, conditions, self.action_dim
+                )
+
+                is_final_step = step_idx == len(t_span) - 2
+                values = self._smc_endpoint_value(
+                    x, t_next, conditions, is_final_step
+                ).reshape(batch_size, num_particles)
+                values = torch.nan_to_num(
+                    values, nan=0.0, posinf=1e6, neginf=-1e6
+                )
+                annealing = (t_next - t_span[0]) / (t_span[-1] - t_span[0])
+                potential = self.cfg.smc_scale * annealing * values
+                log_weights = log_weights + potential - previous_potential
+                previous_potential = potential
+
+                is_resampling_step = (
+                    (step_idx + 1) % self.cfg.smc_resample_every == 0
+                )
+                if is_final_step or not is_resampling_step:
+                    continue
+
+                weights = torch.softmax(log_weights, dim=1)
+                ess = 1.0 / weights.square().sum(dim=1)
+                resample_groups = ess <= (
+                    self.cfg.smc_ess_threshold * num_particles
+                )
+                if not resample_groups.any():
+                    continue
+
+                ancestors = self._systematic_resample(weights)
+                identity = torch.arange(num_particles, device=x.device)
+                identity = identity.unsqueeze(0).expand(batch_size, -1)
+                ancestors = torch.where(
+                    resample_groups.unsqueeze(1), ancestors, identity
+                )
+
+                x_grouped = x.reshape(
+                    batch_size,
+                    num_particles,
+                    self.horizon,
+                    self.action_dim + self.state_dim,
+                )
+                x = x_grouped[batch_idx, ancestors].reshape_as(x)
+                previous_potential = previous_potential[batch_idx, ancestors]
+                log_weights = torch.where(
+                    resample_groups.unsqueeze(1),
+                    torch.zeros_like(log_weights),
+                    log_weights,
+                )
 
         normed_actions = x[:, :, :self.action_dim]
         normed_observations = x[:, :, self.action_dim:]
         actions = self._as_device_tensor(
             self.normalizer.unnormalize(normed_actions, 'actions')
-        )
+        ).reshape(batch_size, num_particles, self.horizon, self.action_dim)
         observations = self._as_device_tensor(
             self.normalizer.unnormalize(normed_observations, 'observations')
-        )
+        ).reshape(batch_size, num_particles, self.horizon, self.state_dim)
 
         with torch.no_grad():
-            values = self.value_model(
-                torch.cat([normed_actions, normed_observations], dim=-1)
-            )[:, -1, 0]
-        values = values.reshape(batch_size, num_candidates)
-        best_idx = values.argmax(dim=1)
-        batch_idx = torch.arange(batch_size, device=x.device)
-
-        best_values = values[batch_idx, best_idx]
-        best_actions = actions.reshape(
-            batch_size, num_candidates, self.horizon, self.action_dim
-        )[batch_idx, best_idx]
-        best_observations = observations.reshape(
-            batch_size, num_candidates, self.horizon, self.state_dim
-        )[batch_idx, best_idx]
+            final_values = self.value_model(x)[:, -1, 0].reshape(
+                batch_size, num_particles
+            )
+            final_values = torch.nan_to_num(
+                final_values, nan=-1e6, posinf=1e6, neginf=-1e6
+            )
+        best_idx = final_values.argmax(dim=1)
+        flat_batch_idx = torch.arange(batch_size, device=x.device)
+        best_values = final_values[flat_batch_idx, best_idx]
+        best_actions = actions[flat_batch_idx, best_idx]
+        best_observations = observations[flat_batch_idx, best_idx]
 
         trajectories = Trajectories(
             to_np(best_actions), to_np(best_observations), to_np(best_values)
         )
         return to_np(best_actions[0, 0]), trajectories
-
-    # Backward-compatible entry point used by older code.
-    def ss_forward(self, conditions, batch_size=1):
-        return self.best_of_n_forward(conditions, batch_size)
 
 
     ### Taylor Expansion Approximate Gradient Guidance ###

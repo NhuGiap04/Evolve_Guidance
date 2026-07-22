@@ -240,7 +240,7 @@ The provided scripts run all configured D4RL locomotion tasks:
 ```bash
 bash run_scripts/train.sh
 bash run_scripts/train_value.sh
-bash run_scripts/eval_best_of_n.sh
+bash run_scripts/eval_smc.sh
 bash run_scripts/eval_gradient.sh
 bash run_scripts/eval_stein.sh
 ```
@@ -251,8 +251,8 @@ The main scripts are:
 
 - `run_scripts/train.sh`: trains CFM and OT-CFM trajectory flow models.
 - `run_scripts/train_value.sh`: trains value models.
-- `run_scripts/eval_best_of_n.sh`: evaluates best-of-N trajectory selection
-  for N in 1, 4, 8, 16, 32, and 64.
+- `run_scripts/eval_smc.sh`: evaluates annealed value-weighted SMC with
+  adaptive resampling.
 - `run_scripts/eval_gradient.sh`: evaluates value-gradient guidance.
 - `run_scripts/eval_stein.sh`: evaluates grouped RBF Stein particle guidance.
 

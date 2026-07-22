@@ -4,7 +4,7 @@ This note documents the formulas used by:
 
 - `run_scripts/eval_gradient.sh`
 - `run_scripts/eval_stein.sh`
-- `run_scripts/eval_best_of_n.sh`
+- `run_scripts/eval_smc.sh`
 
 All three scripts call `run/eval.py`, which builds a `FlowPolicy` from
 `gflower/models_flow/flow_policy.py`. The trajectory tensor is normalized and
@@ -144,19 +144,33 @@ g_t
    \nabla_{\hat{x}_1} J_\phi(\hat{x}_1).
 ```
 
-## `eval_best_of_n.sh`: Best-of-N Selection
+## `eval_smc.sh`: Sequential Monte Carlo
 
-For each environment observation, best-of-N draws `N` independent trajectory
-candidates from the unguided flow model. It evaluates their normalized action
-and observation sequences with the value model and selects by terminal value:
+SMC evolves `K` trajectory particles through the unguided flow ODE. At ODE
+time `t`, it scores a first-order endpoint prediction
 
 ```math
-j^* = \arg\max_{j \in \{1,\ldots,N\}} J_\phi(x_1^{(j)}).
+\hat{x}_1 = x_t + (1-t)v_\theta(x_t,t)
 ```
 
-The first action of candidate `j^*` is executed and the policy replans after the
-next observation. The run script sweeps `N` over `1, 4, 8, 16, 32, 64`; `N=1`
-is the unguided sampling baseline.
+and defines the annealed potential
+
+```math
+G_t(x_t) = \alpha t J_\phi(\hat{x}_1).
+```
+
+Log importance weights are updated incrementally by
+
+```math
+\log w_t = \log w_{t-1} + G_t(x_t) - G_{t-1}(x_{t-1}).
+```
+
+At configured ODE intervals, the implementation computes
+`ESS = 1 / sum(normalized_weight^2)` independently for each environment and
+uses systematic resampling when `ESS <= smc_ess_threshold * K`. It does not
+resample after the final integration step. As in the other locomotion methods,
+the policy executes the first action of the surviving particle with the highest
+final value-model score.
 
 ## `eval_gradient.sh`: Direct Value-Gradient Guidance
 
