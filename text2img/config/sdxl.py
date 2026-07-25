@@ -16,6 +16,7 @@ def _base_config():
     config.sample.num_particles = 4
     config.sample.batch_p = 1
     config.sample.stein_step = 0.02
+    config.sample.step_schedule = "const"
     config.sample.stein_loop = 2
     config.sample.stein_kernel = "rbf"
     config.sample.stein_repulsion = 1.0

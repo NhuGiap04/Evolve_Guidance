@@ -13,6 +13,8 @@ from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import
 from diffusers.utils import deprecate
 from diffusers.utils.torch_utils import randn_tensor
 
+from text2img.diffusers_patch.step_schedule import SUPPORTED_STEP_SCHEDULES, step_schedule_scale
+
 
 def retrieve_timesteps(
     scheduler,
@@ -221,6 +223,7 @@ def pipeline_using_gradient_sdxl(
     batch_p: int = 1,
     reward_fn: Optional[Callable[[torch.Tensor, List[str]], torch.Tensor]] = None,
     stein_step: float = 0.05,
+    step_schedule: str = "const",
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
     stein_repulsion: float = 1.0,
@@ -269,6 +272,9 @@ def pipeline_using_gradient_sdxl(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
+    if step_schedule not in SUPPORTED_STEP_SCHEDULES:
+        choices = ", ".join(SUPPORTED_STEP_SCHEDULES)
+        raise ValueError(f"Unsupported step_schedule {step_schedule!r}. Choose one of: {choices}")
     if stein_repulsion < 0:
         raise ValueError("stein_repulsion must be >= 0")
 
@@ -455,6 +461,8 @@ def pipeline_using_gradient_sdxl(
     prompt_particles = _expand_prompts_for_particles(prompt, base_sample_count, num_particles)
 
     total_inference_steps = len(timesteps)
+    first_timestep = float(timesteps[0].item())
+    last_timestep = float(timesteps[-1].item())
     start = int(start)
     end = total_inference_steps if end is None else int(end)
     if not 0 <= start <= end <= total_inference_steps:
@@ -631,6 +639,12 @@ def pipeline_using_gradient_sdxl(
             post_stein_pred_x0 = None
 
             if is_steered_step:
+                scheduled_step_scale = step_schedule_scale(
+                    step_schedule,
+                    float(t.item()),
+                    first_timestep,
+                    last_timestep,
+                )
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents.detach().clone()
 
@@ -659,6 +673,7 @@ def pipeline_using_gradient_sdxl(
                     adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
                     if stein_adagrad_clip is not None:
                         adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
+                    adaptive_step = adaptive_step * scheduled_step_scale
 
                     latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
 
