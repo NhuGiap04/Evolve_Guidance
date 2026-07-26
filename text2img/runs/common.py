@@ -14,7 +14,7 @@ BASE_SAMPLE_FIELDS = (
     "num_particles",
     "batch_p",
     "stein_step",
-    "step_schedule",
+    "repulsion_schedule",
     "stein_loop",
     "stein_kernel",
     "stein_repulsion",

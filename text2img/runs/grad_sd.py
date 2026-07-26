@@ -52,7 +52,7 @@ def parse_single_args():
     parser.add_argument("--num-particles", type=int, default=4, help="Particles per prompt.")
     parser.add_argument("--batch-p", type=int, default=None, help="Reward micro-batch size.")
     parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
-    parser.add_argument("--step-schedule", type=str, default="const", choices=["const", "linear_decay"], help="Stein step-size schedule.")
+    parser.add_argument("--repulsion-schedule", type=str, default="const", choices=["const", "linear_decay"], help="Stein repulsion schedule.")
     parser.add_argument("--stein-loop", type=int, default=1, help="Stein updates per step.")
     parser.add_argument("--stein-kernel", dest="stein_kernel", type=str, default="rbf", choices=["rbf", "imq", "vmf"], help="Stein kernel.")
     parser.add_argument("--stein-repulsion", type=float, default=1.0, help="Strength for the Stein kernel repulsion term.")
@@ -200,7 +200,7 @@ def run_single_prompt(args):
         num_particles=config.sample.num_particles,
         batch_p=config.sample.batch_p,
         stein_step=config.sample.stein_step,
-        step_schedule=config.sample.step_schedule,
+        repulsion_schedule=config.sample.repulsion_schedule,
         stein_loop=config.sample.stein_loop,
         stein_kernel=config.sample.stein_kernel,
         stein_repulsion=config.sample.stein_repulsion,
@@ -456,7 +456,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-particles", type=int, default=4, help="Particles per prompt.")
     parser.add_argument("--batch-p", type=int, default=None)
     parser.add_argument("--stein-step", type=float, default=0.02, help="Stein step size.")
-    parser.add_argument("--step-schedule", type=str, default=None, choices=["const", "linear_decay"], help="Stein step-size schedule.")
+    parser.add_argument("--repulsion-schedule", type=str, default=None, choices=["const", "linear_decay"], help="Stein repulsion schedule.")
     parser.add_argument("--stein-loop", type=int, default=2, help="Stein updates per step.")
     parser.add_argument("--stein-kernel", "--kernel", dest="stein_kernel", type=str, default="rbf", choices=["rbf", "imq", "vmf"], help="Stein kernel.")
     parser.add_argument("--stein-repulsion", type=float, default=1.0, help="Strength for the Stein kernel repulsion term.")

@@ -59,6 +59,8 @@ Use `--prompts-file` for batch experiments.
 - `--stein-step`: Stein update size
 - `--stein-kernel`: `rbf`,`imq`, `vmf`
 - `--stein-repulsion`: Stein repulsion strength
+- `--repulsion-schedule`: `const` or `linear_decay`; the linear schedule increases
+  repulsion from zero at the initial noise to the configured strength at the end
 - `--start`, `--end`: 0-based steering window, with `end` exclusive; defaults are `0` and `--num-steps`
 - `--start-index`, `--max-prompts`: select a prompt slice in batch mode
 - `--stop-on-error`: stop batch execution on the first failed prompt

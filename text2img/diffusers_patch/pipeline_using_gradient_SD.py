@@ -13,7 +13,10 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
 from diffusers.utils import deprecate
 from diffusers.utils.torch_utils import randn_tensor
 
-from text2img.diffusers_patch.step_schedule import SUPPORTED_STEP_SCHEDULES, step_schedule_scale
+from text2img.diffusers_patch.repulsion_schedule import (
+    SUPPORTED_REPULSION_SCHEDULES,
+    repulsion_schedule_scale,
+)
 
 
 def retrieve_timesteps(
@@ -211,7 +214,7 @@ def pipeline_using_gradient_sd(
     batch_p: int = 1,
     reward_fn: Optional[Callable[[torch.Tensor, List[str]], torch.Tensor]] = None,
     stein_step: float = 0.05,
-    step_schedule: str = "const",
+    repulsion_schedule: str = "const",
     stein_loop: int = 1,
     stein_kernel: str = "rbf",
     stein_repulsion: float = 1.0,
@@ -258,9 +261,9 @@ def pipeline_using_gradient_sd(
         raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
-    if step_schedule not in SUPPORTED_STEP_SCHEDULES:
-        choices = ", ".join(SUPPORTED_STEP_SCHEDULES)
-        raise ValueError(f"Unsupported step_schedule {step_schedule!r}. Choose one of: {choices}")
+    if repulsion_schedule not in SUPPORTED_REPULSION_SCHEDULES:
+        choices = ", ".join(SUPPORTED_REPULSION_SCHEDULES)
+        raise ValueError(f"Unsupported repulsion_schedule {repulsion_schedule!r}. Choose one of: {choices}")
     if stein_repulsion < 0:
         raise ValueError("stein_repulsion must be >= 0")
 
@@ -596,8 +599,8 @@ def pipeline_using_gradient_sd(
             post_stein_pred_x0 = None
 
             if is_steered_step:
-                scheduled_step_scale = step_schedule_scale(
-                    step_schedule,
+                scheduled_repulsion = stein_repulsion * repulsion_schedule_scale(
+                    repulsion_schedule,
                     float(t.item()),
                     first_timestep,
                     last_timestep,
@@ -622,7 +625,7 @@ def pipeline_using_gradient_sd(
                         base_sample_count=base_sample_count,
                         num_particles=num_particles,
                         kernel=stein_kernel,
-                        repulsion_strength=stein_repulsion,
+                        repulsion_strength=scheduled_repulsion,
                     )
                     stein_direction = torch.nan_to_num(stein_direction)
 
@@ -630,8 +633,6 @@ def pipeline_using_gradient_sd(
                     adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
                     if stein_adagrad_clip is not None:
                         adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
-                    adaptive_step = adaptive_step * scheduled_step_scale
-
                     latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
