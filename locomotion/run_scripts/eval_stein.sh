@@ -12,7 +12,7 @@ stein_loop=1
 stein_step=0.02
 stein_kernel=rbf
 
-for flow_matching_type in ot_cfm; do                        # cfm otcfm
+for flow_matching_type in cfm; do                        # cfm otcfm
     for env in halfcheetah hopper walker2d; do                  # halfcheetah hopper walker2d
         for dataset in medium-expert medium medium-replay; do   # medium-expert medium medium-replay
             for grad_at in x_1; do                          # x1 xt
