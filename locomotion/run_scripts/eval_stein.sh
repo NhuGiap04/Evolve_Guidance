@@ -9,10 +9,10 @@ fi
 
 stein_particles=8
 stein_loop=1
-stein_step=0.02
 stein_kernel=rbf
+stein_repulsion=0.1
 
-for flow_matching_type in cfm; do                        # cfm otcfm
+for flow_matching_type in cfm otcfm; do                        # cfm otcfm
     for env in halfcheetah hopper walker2d; do                  # halfcheetah hopper walker2d
         for dataset in medium-expert medium medium-replay; do   # medium-expert medium medium-replay
             for grad_at in x_1; do                          # x1 xt
@@ -42,7 +42,7 @@ for flow_matching_type in cfm; do                        # cfm otcfm
 
                     for schedule in const; do # cosine_decay const linear_decay exp_decay
                         for scale in 0.01; do
-                            for stein_repulsion in 0.01 0.1; do         # 0.01 0.1 1.0
+                            for stein_step in 0.02 0.2 2.0; do         # 0.01 0.1 1.0
                                 python run/eval.py \
                                 --device cuda:0 \
                                 --seed 0 \
