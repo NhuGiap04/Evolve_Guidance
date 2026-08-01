@@ -55,8 +55,7 @@ Use `--prompts-file` for batch experiments.
 - `--num-steps`: denoising steps
 - `--num-particles`: particle count
 - `--batch-p`: reward micro-batch size over particles
-- `--stein-loop`: Stein updates per steered step
-- `--stein-step`: Stein update size
+- `--stein-step`: integrated Stein coefficient (`lambda_t`) per diffusion step
 - `--stein-kernel`: `rbf`,`imq`, `vmf`
 - `--stein-repulsion`: Stein repulsion strength
 - `--repulsion-schedule`: `const` or `linear_decay`; the linear schedule increases
@@ -65,6 +64,15 @@ Use `--prompts-file` for batch experiments.
 - `--start-index`, `--max-prompts`: select a prompt slice in batch mode
 - `--stop-on-error`: stop batch execution on the first failed prompt
 - `--dry-run`: print planned runs without executing them
+
+At each selected denoising step, the SD/SDXL scheduler supplies the base drift
+`u_t`. The pipeline adds the grouped particle field
+`mean_j[k(x_j,x_i) grad log(h_t(x_j)) + gamma_t grad_(x_j) k(x_i,x_j)]`,
+where `log(h_t) = reward / kl_coeff` and `gamma_t` is controlled by
+`stein_repulsion` and `repulsion_schedule`. This field is evaluated exactly
+once per selected diffusion step. The SD and SDXL presets use `eta=0` for
+deterministic ODE dynamics; passing a nonzero `--eta` remains supported as a
+stochastic DDIM extension.
 
 #### Outputs
 

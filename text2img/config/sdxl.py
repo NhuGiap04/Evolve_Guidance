@@ -7,7 +7,9 @@ def _base_config():
     config = general()
 
     config.sample.num_steps = 100
-    config.sample.eta = 1.
+    # eta=0 keeps the base DDIM dynamics deterministic, as required by the
+    # interacting ODE. Nonzero eta remains available as a stochastic extension.
+    config.sample.eta = 0.0
 
     config.sample.batch_size = 1
     config.max_vis_images = 2
@@ -17,11 +19,8 @@ def _base_config():
     config.sample.batch_p = 1
     config.sample.stein_step = 0.02
     config.sample.repulsion_schedule = "const"
-    config.sample.stein_loop = 2
     config.sample.stein_kernel = "rbf"
     config.sample.stein_repulsion = 1.0
-    config.sample.stein_adagrad_eps = 1e-8
-    config.sample.stein_adagrad_clip = None
     config.sample.kl_coeff = 0.0001
     config.sample.soft_temperature = None
     config.sample.start = 0

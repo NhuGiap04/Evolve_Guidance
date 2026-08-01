@@ -17,6 +17,7 @@ from text2img.diffusers_patch.repulsion_schedule import (
     SUPPORTED_REPULSION_SCHEDULES,
     repulsion_schedule_scale,
 )
+from text2img.diffusers_patch.stein_ode import stein_guidance_field
 
 
 def retrieve_timesteps(
@@ -123,61 +124,17 @@ def _stein_vector_field(
     repulsion_strength: float,
     eps: float = 1e-8,
 ) -> torch.Tensor:
-    # Compute Stein direction per prompt group to avoid cross-prompt particle interactions.
-    if num_particles == 1:
-        return score
-    if kernel not in {"rbf", "imq", "vmf"}:
-        raise ValueError("stein_kernel must be one of: rbf, imq, vmf.")
+    """Backward-compatible private wrapper; ``score`` is now grad log h_t."""
 
-    b, c, h, w = latents.shape
-    if b != base_sample_count * num_particles:
-        raise ValueError("Latent batch does not match base_sample_count * num_particles.")
-
-    latents_grouped = latents.view(base_sample_count, num_particles, c, h, w)
-    score_grouped = score.view(base_sample_count, num_particles, c, h, w)
-    out_grouped = torch.zeros_like(score_grouped)
-
-    for group_idx in range(base_sample_count):
-        x = latents_grouped[group_idx].reshape(num_particles, -1)
-        s = score_grouped[group_idx].reshape(num_particles, -1)
-
-        if kernel == "vmf":
-            kappa = 1.0
-            x_norm = x.norm(dim=1, keepdim=True).clamp_min(eps)
-            x_unit = x / x_norm
-            cosine = x_unit @ x_unit.t()
-            kernel_matrix = torch.exp(kappa * (cosine - 1.0))
-
-            attraction = (kernel_matrix.t() @ s) / float(num_particles)
-            weighted_unit_sum = kernel_matrix.t() @ x_unit
-            weighted_cos_sum = (kernel_matrix * cosine).sum(dim=0, keepdim=True).t()
-            repulsion = kappa * (weighted_unit_sum - x_unit * weighted_cos_sum) / x_norm
-            repulsion = repulsion / float(num_particles)
-        else:
-            dist2 = torch.cdist(x, x) ** 2
-            if kernel == "rbf":
-                positive_dist2 = dist2[dist2 > 0]
-                if positive_dist2.numel() == 0:
-                    h_bandwidth = torch.tensor(1.0, device=latents.device, dtype=latents.dtype)
-                else:
-                    h_bandwidth = positive_dist2.median() / (math.log(num_particles + 1.0) + eps)
-                    h_bandwidth = torch.clamp(h_bandwidth, min=eps)
-                kernel_matrix = torch.exp(-dist2 / h_bandwidth)
-                grad_weight = (2.0 / h_bandwidth) * kernel_matrix
-            else:
-                kernel_matrix = torch.rsqrt(1.0 + dist2)
-                grad_weight = torch.pow(1.0 + dist2, -1.5)
-
-            attraction = (kernel_matrix.t() @ s) / float(num_particles)
-            weighted_sum = grad_weight.t() @ x
-            grad_sum = grad_weight.sum(dim=0, keepdim=True).t()
-            repulsion = (weighted_sum - x * grad_sum) / float(num_particles)
-
-        phi = attraction + repulsion_strength * repulsion
-        out_grouped[group_idx] = phi.view(num_particles, c, h, w)
-
-    return out_grouped.view(b, c, h, w)
-
+    return stein_guidance_field(
+        latents=latents,
+        log_h_grad=score,
+        base_sample_count=base_sample_count,
+        num_particles=num_particles,
+        kernel=kernel,
+        repulsion_strength=repulsion_strength,
+        eps=eps,
+    )
 
 
 def _to_timestep_int(t: Union[int, torch.Tensor]) -> int:
@@ -227,18 +184,21 @@ def pipeline_using_gradient_sdxl(
     reward_fn: Optional[Callable[[torch.Tensor, List[str]], torch.Tensor]] = None,
     stein_step: float = 0.05,
     repulsion_schedule: str = "const",
-    stein_loop: int = 1,
     stein_kernel: str = "rbf",
     stein_repulsion: float = 1.0,
-    stein_adagrad_eps: float = 1e-8,
-    stein_adagrad_clip: Optional[Tuple[float, float]] = None,
     kl_coeff: float = 0.0001,
     start: int = 0,
     end: Optional[int] = None,
     return_all_particles: bool = True,
     **kwargs,
 ) -> Union[StableDiffusionXLPipelineOutput, Tuple]:
-    """Run SDXL denoising with optional Stein particle transport guidance."""
+    """Run SDXL with a scheduler drift plus Stein-guidance ODE transport.
+
+    ``stein_step`` is the integrated lambda_t coefficient at one diffusion
+    step, ``stein_repulsion`` (after its schedule) is gamma_t, and
+    ``reward / kl_coeff`` defines log h_t. The Stein field is evaluated and
+    applied exactly once at every selected diffusion step.
+    """
 
     callback = kwargs.pop("callback", None)
     callback_steps = kwargs.pop("callback_steps", None)
@@ -271,8 +231,6 @@ def pipeline_using_gradient_sdxl(
         raise ValueError("batch_p must be >= 1")
     if num_particles < batch_p:
         raise ValueError("num_particles should be greater than or equal to batch_p")
-    if stein_loop < 0:
-        raise ValueError("stein_loop must be >= 0")
     if stein_step < 0:
         raise ValueError("stein_step must be >= 0")
     if repulsion_schedule not in SUPPORTED_REPULSION_SCHEDULES:
@@ -471,7 +429,7 @@ def pipeline_using_gradient_sdxl(
     if not 0 <= start <= end <= total_inference_steps:
         raise ValueError(f"Expected 0 <= start <= end <= {total_inference_steps}, got start={start}, end={end}.")
 
-    use_stein = start < end and reward_fn is not None and stein_loop > 0 and stein_step > 0
+    use_stein = start < end and reward_fn is not None and stein_step > 0
     reward_chunk_size = max(1, int(batch_p) * base_sample_count)
 
     def _slice_condition_tensor(
@@ -635,6 +593,8 @@ def pipeline_using_gradient_sdxl(
             t_int = _to_timestep_int(t)
             noise_pred = _predict_noise(latents, t)
             is_steered_step = use_stein and (start <= i < end)
+            base_latents = latents
+            steering_delta = torch.zeros_like(latents)
 
             pre_stein_latents = None
             post_stein_latents = None
@@ -651,35 +611,24 @@ def pipeline_using_gradient_sdxl(
                 if "pre_stein_latents" in callback_on_step_end_tensor_inputs:
                     pre_stein_latents = latents.detach().clone()
 
-                grad_accumulator = torch.zeros_like(latents, dtype=torch.float32)
-                for loop_idx in range(stein_loop):
-                    noise_pred_for_score = _predict_noise(latents, t)
-                    pred_x0_for_score, _, sqrt_one_minus_alpha_bar_t = _predict_x0(
-                        latents, t_int, noise_pred_for_score
-                    )
-                    if loop_idx == 0:
-                        pre_stein_pred_x0 = pred_x0_for_score.detach().clone()
-                    prior_score = -noise_pred_for_score / torch.clamp(sqrt_one_minus_alpha_bar_t, min=1e-6)
-                    _, reward_grad = _compute_reward_grad(latents, t, return_rewards=False)
-                    score_q = prior_score.float() + reward_grad.float()
-                    stein_direction = _stein_vector_field(
-                        latents=latents.float(),
-                        score=score_q,
-                        base_sample_count=base_sample_count,
-                        num_particles=num_particles,
-                        kernel=stein_kernel,
-                        repulsion_strength=scheduled_repulsion,
-                    )
-                    stein_direction = torch.nan_to_num(stein_direction)
-
-                    grad_accumulator = grad_accumulator + stein_direction * stein_direction
-                    adaptive_step = stein_step / (torch.sqrt(grad_accumulator) + stein_adagrad_eps)
-                    if stein_adagrad_clip is not None:
-                        adaptive_step = adaptive_step.clamp(min=stein_adagrad_clip[0], max=stein_adagrad_clip[1])
-                    latents = latents + (adaptive_step * stein_direction).to(latents.dtype)
+                # One explicit Stein evaluation per selected diffusion step.
+                # The DDIM proposal below independently integrates u_t.
+                pre_stein_pred_x0 = _predict_x0(base_latents, t_int, noise_pred)[0].detach().clone()
+                _, reward_grad = _compute_reward_grad(base_latents, t, return_rewards=False)
+                stein_direction = stein_guidance_field(
+                    latents=base_latents.float(),
+                    log_h_grad=reward_grad.float(),
+                    base_sample_count=base_sample_count,
+                    num_particles=num_particles,
+                    kernel=stein_kernel,
+                    repulsion_strength=scheduled_repulsion,
+                )
+                stein_direction = torch.nan_to_num(stein_direction)
+                steering_delta = (stein_step * stein_direction).to(base_latents.dtype)
+                stein_latents = base_latents + steering_delta
 
                 if "post_stein_latents" in callback_on_step_end_tensor_inputs:
-                    post_stein_latents = latents.detach().clone()
+                    post_stein_latents = stein_latents.detach().clone()
 
             if hasattr(self.scheduler, "previous_timestep"):
                 prev_t = self.scheduler.previous_timestep(t)
@@ -713,19 +662,22 @@ def pipeline_using_gradient_sdxl(
             pred_noise_coeff = torch.sqrt(torch.clamp(1.0 - alpha_bar_prev - sigma_t**2, min=0.0))
             white_noise = randn_tensor(latents.shape, generator=generator, device=latents.device, dtype=latents.dtype)
 
-            # Pred x0|t = x0(steered_xt). Reuse noise prediction when no steering changed latents.
-            steered_noise_pred = _predict_noise(latents, t) if is_steered_step else noise_pred
-            pred_x0, _, _ = _predict_x0(latents, t_int, steered_noise_pred)
+            # First-order additive splitting of
+            # dX/dt = u_t(X) + lambda_t * SteinField(X).  The DDIM proposal is
+            # the base u_t flow; steering_delta is the integrated Stein term.
+            pred_x0, _, _ = _predict_x0(base_latents, t_int, noise_pred)
             if is_steered_step and callback_on_step_end is not None:
-                post_stein_pred_x0 = pred_x0.detach()
+                post_noise_pred = _predict_noise(stein_latents, t)
+                post_stein_pred_x0 = _predict_x0(stein_latents, t_int, post_noise_pred)[0].detach()
 
-            latents_dtype = latents.dtype
+            latents_dtype = base_latents.dtype
             
             # DDIM proposal from predicted clean sample and guided noise.
             latents = (
                 torch.sqrt(torch.clamp(alpha_bar_prev, min=0.0)) * pred_x0
                 + pred_noise_coeff * noise_pred
                 + sigma_t * white_noise
+                + steering_delta
             )
             if latents.dtype != latents_dtype and torch.backends.mps.is_available():
                 latents = latents.to(latents_dtype)

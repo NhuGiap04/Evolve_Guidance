@@ -22,7 +22,6 @@ The sampler uses particles and Stein updates, without SMC weighting, resampling,
 
 - $K$: number of diffusion particles per prompt.
 - $N$: number of denoising timesteps.
-- $M$: inner Stein loops per steered timestep.
 - $(\text{start},\text{end})$: steering window in inference-step index space, with $\text{start}\le i\le\text{end}$.
 - $h(x_0)$: reward/verifier score on decoded clean samples.
 - $\alpha$: reward temperature / KL trade-off coefficient.
@@ -202,7 +201,7 @@ $$
 
 Then evaluate $h(z^{(j,\ell)})$ after decoding the anchor to image space if the reward model expects images. These anchors replace the old Good set anchors; they are not selected by threshold.
 
-## 6. Stein Transport with AdaGrad
+## 6. Single-Step Stein Transport
 
 Use the soft good-conditioned score from Section 4 as the target score inside an SVGD field. For particles $\{x_t^{(j)}\}_{j=1}^{K}$ in the same prompt group:
 
@@ -226,19 +225,12 @@ h = \frac{\mathrm{median}_{i\neq j}\|u_i-u_j\|^2}{\log(K+1)+\delta}.
 \quad\text{(RBF)}.
 $$
 
-Inner-loop update for $M$ iterations:
+Evaluate the field once and apply one explicit update at each selected
+diffusion step:
 
 $$
-G\leftarrow G+\hat\phi_t(x_t)^2,
-\qquad
-\eta_{\text{adapt}}=\frac{\eta_0}{\sqrt{G}+\epsilon},
+\tilde x_t=x_t+\texttt{stein\_step}\,\hat\phi_t(x_t).
 $$
-
-$$
-x_t\leftarrow x_t+\eta_{\text{adapt}}\odot\hat\phi_t(x_t),
-$$
-
-where $\eta_0=$ `stein_step` and $\epsilon=$ `stein_adagrad_eps`.
 
 ## 7. Off-Manifold Correction for $x_{t-1}$
 
@@ -247,13 +239,7 @@ A Stein update directly modifies $x_t$ and can move the latent away from the dif
 Let the Stein-refined latent be
 
 $$
-\tilde x_t = x_t + \epsilon_\phi \hat\phi_t(x_t)
-$$
-
-or, after $M$ AdaGrad steps,
-
-$$
-\tilde x_t\equiv x_t^{(M)}.
+\tilde x_t = x_t + \texttt{stein\_step}\,\hat\phi_t(x_t).
 $$
 
 Predict a clean sample from the refined latent:
@@ -288,7 +274,7 @@ The correction uses $\bar x_{0|t}$ from the Stein-refined latent, while the nois
       1. For each particle, obtain one or more approximate $x_0$ anchors using a distilled or fast-sampling model such as DPM, LCM, or DMD.
       2. Evaluate rewards $h(z^{(i)})$ for all anchors.
       3. Estimate the soft good-conditioned score with the Monte Carlo mixture formula.
-      4. Run $M$ Stein updates on $x_t$ with AdaGrad-preconditioned step size.
+      4. Evaluate and apply one Stein update to $x_t$.
       5. Apply the off-manifold correction by predicting $\bar x_{0|t}$ from the Stein-refined latent.
    3. Compute $x_{t-1}$ from $\bar x_{0|t}$ and the scheduler noise term.
 3. Continue until $t=0$.
@@ -298,9 +284,7 @@ The correction uses $\bar x_{0|t}$ from the Stein-refined latent, while the nois
 
 - `num_particles (K) = 4`
 - `predicted_samples (L) = 1` to `4` per particle
-- `stein_loop (M) = 1`
 - `stein_step = 0.002` to `0.005`
-- `stein_adagrad_eps = 1e-8`
 - `stein_kernel = "rbf"` or `"imq"` (`"rbf"` default)
 - `alpha = kl_coeff`
 - `prediction_model = "dpm"` for the fast solver, or `prediction_model = "default"` for the base $\hat x_{0|t}$ estimate

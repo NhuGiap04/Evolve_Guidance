@@ -15,10 +15,8 @@ BASE_SAMPLE_FIELDS = (
     "batch_p",
     "stein_step",
     "repulsion_schedule",
-    "stein_loop",
     "stein_kernel",
     "stein_repulsion",
-    "stein_adagrad_eps",
     "kl_coeff",
 )
 
