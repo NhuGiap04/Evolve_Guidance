@@ -1,4 +1,4 @@
-# Stein-Guided Sampling for Test-time Alignment of Diffusion and Flow Models
+# Stein-Guided Test-Time Alignment for Diffusion and Flow Models
 
 Experiment code for Stein-guided sampling and test-time alignment methods. The repository
 contains Stein-guided text-to-image diffusion experiments, offline RL flow
