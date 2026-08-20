@@ -1,10 +1,9 @@
-# Self-Evolving Guidance
+# Stein-Guided Sampling for Test-time Alignment of Diffusion and Flow Models
 
-Experiment code for self-evolving test-time guidance methods. The repository
+Experiment code for Stein-guided sampling and test-time alignment methods. The repository
 contains Stein-guided text-to-image diffusion experiments, offline RL flow
-guidance baselines, Stein test-time alignment for image inverse problems, and a
-discrete diffusion workspace for text generation guidance and evaluation. Each
-experiment family keeps its runners, models, and setup notes in a separate
+guidance baselines and Stein test-time alignment for image inverse problems.
+Each experiment family keeps its runners, models, and setup notes in a separate
 section.
 
 ## Repository Map
@@ -12,11 +11,10 @@ section.
 - `text2img/`: text-to-image configs, runners, reward models, scorers, prompts, and patched diffusion pipelines.
 - `inverse/`: Stein test-time alignment experiments for image inverse problems with flow-matching priors.
 - `locomotion/`: Guided Flow Planner experiments for D4RL locomotion tasks.
-- `discrete_diffusion/`: discrete diffusion migration workspace and evaluation tools.
 
 ## Experiments
 
-### Text-To-Image Stein Guidance
+### 1. Text-To-Image Stein Guidance
 
 #### Setup
 ```bash
@@ -88,7 +86,7 @@ Batch runs write to:
 
 Run directories contain generated images and `final_rewards.json`.
 
-### Image Inverse Problems
+### 2. Image Inverse Problems
 
 The `inverse/` module tests test-time alignment of flow-matching image models
 for noisy inverse problems. It supports inpainting, Gaussian deblurring, and
@@ -143,7 +141,7 @@ bash scripts/g_MC.sh
 Each run writes generated reconstructions, ground-truth images, degraded
 measurements, and `metrics.txt` under `inverse/infer/<experiment-name>/`.
 
-### Locomotion Flow Guidance
+### 3. Locomotion Flow Guidance
 
 The `locomotion/` folder contains the Guided Flow Planner (`gflower`) offline RL
 experiments adapted from the flow guidance baseline. These runs train flow
@@ -213,14 +211,3 @@ Script roles:
 These scripts sweep over `halfcheetah`, `hopper`, and `walker2d` D4RL datasets.
 For quick smoke tests, reduce the loops in the shell scripts or run the
 corresponding `python run/*.py` command directly with fewer training steps.
-
-### Discrete Diffusion
-
-This area is prepared for future discrete diffusion experiments.
-
-Current utilities:
-
-- `discrete_diffusion/evaluation/mdlm_to_eval_format.py`: convert MDLM-style samples to SSD-LM evaluation format.
-- `discrete_diffusion/evaluation/compute_metrics.sh`: compute PPL, CoLA, diversity, and toxicity metrics for generated JSONL files.
-- `discrete_diffusion/evaluation/aggregate_over_seeds_mdlm.py`: aggregate metric files across seeds or repeated runs.
-- `discrete_diffusion/reward_functions.py`: reward/model scoring utilities.
