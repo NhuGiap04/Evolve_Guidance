@@ -2,13 +2,15 @@
 
 Experiment code for self-evolving test-time guidance methods. The repository
 contains Stein-guided text-to-image diffusion experiments, offline RL flow
-guidance baselines, and a discrete diffusion workspace for text generation
-guidance and evaluation. Each experiment family keeps its runners, models, and
-setup notes in a separate section.
+guidance baselines, Stein test-time alignment for image inverse problems, and a
+discrete diffusion workspace for text generation guidance and evaluation. Each
+experiment family keeps its runners, models, and setup notes in a separate
+section.
 
 ## Repository Map
 
 - `text2img/`: text-to-image configs, runners, reward models, scorers, prompts, and patched diffusion pipelines.
+- `inverse/`: Stein test-time alignment experiments for image inverse problems with flow-matching priors.
 - `locomotion/`: Guided Flow Planner experiments for D4RL locomotion tasks.
 - `discrete_diffusion/`: discrete diffusion migration workspace and evaluation tools.
 
@@ -85,6 +87,61 @@ Batch runs write to:
 ```
 
 Run directories contain generated images and `final_rewards.json`.
+
+### Image Inverse Problems
+
+The `inverse/` module tests test-time alignment of flow-matching image models
+for noisy inverse problems. It supports inpainting, Gaussian deblurring, and
+super-resolution, with PiGDM/PiGDM+, gradient-based, and Monte Carlo guidance
+variants.
+
+#### Setup
+
+Install the module and its dependencies from the repository root:
+
+```bash
+cd inverse
+pip install -r requirements.txt
+pip install -e .
+```
+
+The current data loader expects CelebA-HQ images under
+`inverse/data_cache/celeba_hq_256/`. Place the matching flow-model checkpoint
+under `inverse/results/`; for example, the default configuration loads:
+
+```text
+inverse/results/cfm_punet256_celeba256/model_499.pt
+```
+
+#### Running Experiments
+
+Run inverse-problem experiments from inside `inverse/`. This example uses the
+default 256x256 CelebA-HQ model for inpainting on GPU 0:
+
+```bash
+cd inverse
+python run/inference_inverse.py \
+  --device cuda:0 \
+  --data_cache_dir . \
+  --problem inpainting \
+  --guide_method PiGDM
+```
+
+Set `--problem` to `inpainting`, `deblurring`, or `superresolution`. Supported
+guidance methods are `PiGDM`, `PiGDM+`, `nabla_xt_J_xt`, `nabla_x1_J_x1`,
+`nabla_xt_J_x1`, and `MC`. The scripts in `inverse/scripts/` provide parameter
+sweeps for the available guidance variants:
+
+```bash
+bash scripts/PiGDM.sh
+bash scripts/g_sim_inv_A.sh
+bash scripts/g_cov_A.sh
+bash scripts/g_cov_G.sh
+bash scripts/g_MC.sh
+```
+
+Each run writes generated reconstructions, ground-truth images, degraded
+measurements, and `metrics.txt` under `inverse/infer/<experiment-name>/`.
 
 ### Locomotion Flow Guidance
 

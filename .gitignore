@@ -214,5 +214,6 @@ __marimo__/
 
 # Note
 *.txt
+!inverse/requirements.txt
 
 checkpoints/
